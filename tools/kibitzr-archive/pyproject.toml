@@ -17,5 +17,8 @@ test = ["pytest"]
 [project.entry-points."kibitzr.fetcher"]
 archive = "kibitzr_archive.promoter:ArchivePromoter"
 
+[project.entry-points."kibitzr.cli"]
+archive = "kibitzr_archive.cli:extend_cli"
+
 [tool.setuptools.packages.find]
 include = ["kibitzr_archive*"]
