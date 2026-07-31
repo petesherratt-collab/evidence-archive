@@ -1,0 +1,181 @@
+# Government contract awards — trial watchlist
+#
+# Ten targets, split three ways:
+#   1-5   recurring sources, to find out whether there is a repeatable format
+#   6-9   individual award notices, watched for silent amendment
+#   10    a standing accountability angle (awards made without competition)
+#
+# IMPORTANT: every URL and selector below is UNVERIFIED. The environment this
+# was written in cannot reach gov domains, so nothing here has been fetched.
+# Run ./probe.py against each target before trusting it — that tool fetches
+# twice and shows you what churns between identical requests, which is how you
+# find a selector that produces a stable hash.
+#
+# Selectors marked PROVISIONAL are educated guesses at best. Expect to replace
+# all of them. A target that cannot be stabilised is a finding, not a failure.
+
+# Identify the crawler. An archive making an evidential claim should say who it
+# is and how to be contacted; it also keeps the collection defensible if the
+# provenance of the archive is ever challenged.
+#
+# NOTE: kibitzr's simple fetcher hardcodes its own User-Agent (fetcher/simple.py),
+# so this is not yet wired through. Until it is, either patch that line or run
+# the JS-rendered targets through the browser fetcher, which honours a profile.
+# Left here so the intent is recorded rather than forgotten.
+#
+#   user-agent: "policy-archive/0.1 (+https://example.org/about-this-crawler)"
+
+checks:
+
+  # ---------------------------------------------------------------------
+  # 1-5: recurring sources
+  # ---------------------------------------------------------------------
+
+  # The single best trial target. Published each weekday afternoon US Eastern,
+  # above a value threshold, naming winners. Scheduled, discrete and structured,
+  # so it produces material daily rather than making you wait for a change.
+  #
+  # Polled on a period rather than `schedule: {every: day, at: "..."}` because
+  # kibitzr's scheduler works in the host's local time, and getting that wrong
+  # means silently missing the publication window. A period catches it either
+  # way and gives the poll log more to say.
+  - name: US DoD daily contract announcements
+    url: https://www.defense.gov/News/Contracts/
+    period: 4h
+    archive: true
+    transform:
+      - css: .alist                  # PROVISIONAL
+      - text
+      - changes: verbose
+    notify:
+      - stash
+
+  # Contracts Finder and Find a Tender both publish OCDS. Prefer the API over
+  # the HTML search pages: search results churn constantly (result ordering,
+  # counts, session tokens) and will produce nothing but noise, while OCDS is
+  # structured and diffable.
+  #
+  # Verify the release-package path before running — these endpoints have moved.
+  # `jq` reduces each release to the fields that matter, so cosmetic changes in
+  # unrelated parts of the payload do not register as changes.
+  - name: UK Contracts Finder — recent awards
+    url: https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search?stages=award
+    period: 6h
+    archive: true
+    transform:
+      - jq: '[.releases[] | {ocid, date, title: .tender.title, buyer: .buyer.name, value: .awards[]?.value, supplier: [.awards[]?.suppliers[]?.name]}] | sort_by(.ocid)'
+      - changes: verbose
+    notify:
+      - stash
+
+  - name: UK Find a Tender — recent awards
+    url: https://www.find-tender.service.gov.uk/api/1.0/ocdsReleasePackages
+    period: 6h
+    archive: true
+    transform:
+      - jq: '[.releases[] | select(.tag[]? == "award") | {ocid, date, title: .tender.title, buyer: .buyer.name, value: .awards[]?.value, supplier: [.awards[]?.suppliers[]?.name]}] | sort_by(.ocid)'
+      - changes: verbose
+    notify:
+      - stash
+
+  # Framework recompetes: incumbency losses are material and under-covered.
+  - name: Crown Commercial Service — agreements
+    url: https://www.crowncommercial.gov.uk/agreements
+    period: 12h
+    archive: true
+    transform:
+      - css: main                    # PROVISIONAL
+      - text
+      - changes: verbose
+    notify:
+      - stash
+
+  - name: NHS England — procurement notices
+    url: https://www.england.nhs.uk/publication/procurement-notices/
+    period: 12h
+    archive: true
+    transform:
+      - css: main                    # PROVISIONAL
+      - text
+      - changes: verbose
+    notify:
+      - stash
+
+  # ---------------------------------------------------------------------
+  # 6-9: individual award notices, watched for silent amendment
+  #
+  # This is the highest-value block and the one nobody runs. Procurement
+  # records get quietly revised — values restated, suppliers changed, notices
+  # withdrawn — and the original is not usually recoverable afterwards.
+  # Catching one is a piece on its own, and it is where the hash chain stops
+  # being decorative: you can prove what the register said on the day.
+  #
+  # These are placeholders on purpose. Inventing notice IDs would be worse
+  # than leaving them blank. Fill them with four recent, large or contested
+  # awards — ideally a mix: one central government, one NHS, one defence, one
+  # local authority. Then set `period` tight for the first month, because
+  # amendments cluster shortly after publication.
+  # ---------------------------------------------------------------------
+
+  - name: Watched award 1 — REPLACE ME
+    url: https://www.contractsfinder.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
+    period: 3h
+    archive: true
+    transform:
+      - css: main                    # PROVISIONAL
+      - text
+      - changes: verbose
+    notify:
+      - stash
+
+  - name: Watched award 2 — REPLACE ME
+    url: https://www.contractsfinder.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
+    period: 3h
+    archive: true
+    transform:
+      - css: main                    # PROVISIONAL
+      - text
+      - changes: verbose
+    notify:
+      - stash
+
+  - name: Watched award 3 — REPLACE ME
+    url: https://www.find-tender.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
+    period: 3h
+    archive: true
+    transform:
+      - css: main                    # PROVISIONAL
+      - text
+      - changes: verbose
+    notify:
+      - stash
+
+  - name: Watched award 4 — REPLACE ME
+    url: https://www.find-tender.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
+    period: 3h
+    archive: true
+    transform:
+      - css: main                    # PROVISIONAL
+      - text
+      - changes: verbose
+    notify:
+      - stash
+
+  # ---------------------------------------------------------------------
+  # 10: standing accountability angle
+  #
+  # Awards made without competition are a defined, findable category, and the
+  # pattern is the story — no scoop required. Adjust the filter to whatever
+  # the current notice regime calls it; the UK notice types changed under the
+  # Procurement Act during 2025, so older query syntax may not apply.
+  # ---------------------------------------------------------------------
+
+  - name: UK direct awards — no competition
+    url: https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search?stages=award&procedure=direct
+    period: 12h
+    archive: true
+    transform:
+      - jq: '[.releases[] | {ocid, date, buyer: .buyer.name, value: .awards[]?.value, supplier: [.awards[]?.suppliers[]?.name], method: .tender.procurementMethod}] | sort_by(.ocid)'
+      - changes: verbose
+    notify:
+      - stash
