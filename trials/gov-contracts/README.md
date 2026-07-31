@@ -21,10 +21,18 @@ moved before. `probe.py` exists to make that quick.
 
 ## Why the targets are what they are
 
-**1–5, recurring sources.** The DoD daily announcement is the most valuable
-of these: published each weekday afternoon US Eastern, above a value
-threshold, naming winners. It produces material daily, so within a fortnight
-you know whether the format works.
+**1–5, recurring sources.** The US daily defence announcement is the most
+valuable of these: contracts of $7.5 million or more, published each business
+day at 5 p.m. ET, naming winners. It produces material daily, so within a
+fortnight you know whether the format works.
+
+Note that it now lives at `war.gov`, not `defense.gov` — the department was
+renamed to Department of War by executive order and the old domain redirects.
+This is a useful early lesson: kibitzr follows redirects silently, so a stale
+URL would have archived `war.gov` content while the poll log recorded a
+`defense.gov` address. Resolve every target to its canonical host before
+adding it. It is also, incidentally, exactly the kind of quiet institutional
+change the archive exists to capture.
 
 The UK sources use OCDS APIs rather than HTML search pages, deliberately.
 Search results churn on every request — ordering, counts, session state — and
@@ -109,3 +117,8 @@ store.verify_chain("US DoD daily contract announcements")
 - **UK notice types changed** under the Procurement Act during 2025, so query
   syntax and notice structures may not match older documentation, and
   backfilling against historical data will not line up cleanly.
+- **Redirects are followed silently.** Kibitzr's fetcher follows them by
+  default, so a target that has moved will be archived under its old URL —
+  the log attests to a fetch that did not happen as described. Resolve each
+  URL to its final host before adding it, and re-check the watchlist
+  periodically. The `war.gov` move happened to a target in this very config.

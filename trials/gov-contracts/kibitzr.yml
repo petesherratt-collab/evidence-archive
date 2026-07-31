@@ -31,16 +31,24 @@ checks:
   # 1-5: recurring sources
   # ---------------------------------------------------------------------
 
-  # The single best trial target. Published each weekday afternoon US Eastern,
-  # above a value threshold, naming winners. Scheduled, discrete and structured,
-  # so it produces material daily rather than making you wait for a change.
+  # The single best trial target. Contracts of $7.5 million or more, announced
+  # each business day at 5 p.m. ET, naming winners. Scheduled, discrete and
+  # structured, so it produces material daily rather than making you wait.
+  #
+  # NOTE ON THE HOST: this was defense.gov until the department was renamed to
+  # Department of War by executive order; defense.gov now redirects to war.gov.
+  # Point at the canonical host, not the redirect. Kibitzr's fetcher follows
+  # redirects silently, so a stale URL would archive war.gov content while the
+  # poll log recorded a defense.gov address -- the archive would attest to a
+  # fetch that did not happen as described. Resolve every target to its final
+  # host before adding it, and re-check periodically: watchlist URLs drift.
   #
   # Polled on a period rather than `schedule: {every: day, at: "..."}` because
   # kibitzr's scheduler works in the host's local time, and getting that wrong
-  # means silently missing the publication window. A period catches it either
-  # way and gives the poll log more to say.
-  - name: US DoD daily contract announcements
-    url: https://www.defense.gov/News/Contracts/
+  # means silently missing the 5 p.m. ET publication window. A period catches
+  # it either way and gives the poll log more to say.
+  - name: US DoW daily contract announcements
+    url: https://www.war.gov/News/Contracts/
     period: 4h
     archive: true
     transform:
