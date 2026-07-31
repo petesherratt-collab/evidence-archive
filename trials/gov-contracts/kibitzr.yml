@@ -1,4 +1,4 @@
-# Government contract awards — trial watchlist
+# UK government contract awards — trial watchlist
 #
 # Ten targets, split three ways:
 #   1-5   recurring sources, to find out whether there is a repeatable format
@@ -6,67 +6,44 @@
 #   10    a standing accountability angle (awards made without competition)
 #
 # IMPORTANT: every URL and selector below is UNVERIFIED. The environment this
-# was written in cannot reach gov domains, so nothing here has been fetched.
+# was written in cannot reach gov.uk domains, so nothing here has been fetched.
 # Run ./probe.py against each target before trusting it — that tool fetches
 # twice and shows you what churns between identical requests, which is how you
 # find a selector that produces a stable hash.
 #
-# Selectors marked PROVISIONAL are educated guesses at best. Expect to replace
-# all of them. A target that cannot be stabilised is a finding, not a failure.
+# Resolve every URL to its canonical host first. Kibitzr follows redirects
+# silently, so a moved target gets archived under its old address and the poll
+# log attests to a fetch that did not happen as described. This is not
+# hypothetical: the US defence target this list previously carried had moved
+# from defense.gov to war.gov without the config noticing.
+#
+# Selectors marked PROVISIONAL are educated guesses. Expect to replace them.
+# A target that cannot be stabilised is a finding, not a failure.
 
-# Identify the crawler. An archive making an evidential claim should say who it
-# is and how to be contacted; it also keeps the collection defensible if the
-# provenance of the archive is ever challenged.
-#
-# NOTE: kibitzr's simple fetcher hardcodes its own User-Agent (fetcher/simple.py),
-# so this is not yet wired through. Until it is, either patch that line or run
-# the JS-rendered targets through the browser fetcher, which honours a profile.
-# Left here so the intent is recorded rather than forgotten.
-#
-#   user-agent: "policy-archive/0.1 (+https://example.org/about-this-crawler)"
+# NOTE: kibitzr's simple fetcher hardcodes its User-Agent (fetcher/simple.py),
+# so an identifying UA is not yet wired through. An archival crawler making an
+# evidential claim should say who it is. Patch that line before the archive is
+# used for anything load-bearing.
 
 checks:
 
   # ---------------------------------------------------------------------
   # 1-5: recurring sources
+  #
+  # Prefer OCDS APIs over HTML search pages. Search results churn on every
+  # request through ordering, counts and session state, and would generate
+  # constant noise while telling you nothing. Structured releases reduced
+  # through jq change only when the underlying awards do.
+  #
+  # Verify every release-package path before running: these endpoints have
+  # moved before, and the notice regime changed under the Procurement Act
+  # during 2025.
   # ---------------------------------------------------------------------
 
-  # The single best trial target. Contracts of $7.5 million or more, announced
-  # each business day at 5 p.m. ET, naming winners. Scheduled, discrete and
-  # structured, so it produces material daily rather than making you wait.
-  #
-  # NOTE ON THE HOST: this was defense.gov until the department was renamed to
-  # Department of War by executive order; defense.gov now redirects to war.gov.
-  # Point at the canonical host, not the redirect. Kibitzr's fetcher follows
-  # redirects silently, so a stale URL would archive war.gov content while the
-  # poll log recorded a defense.gov address -- the archive would attest to a
-  # fetch that did not happen as described. Resolve every target to its final
-  # host before adding it, and re-check periodically: watchlist URLs drift.
-  #
-  # Polled on a period rather than `schedule: {every: day, at: "..."}` because
-  # kibitzr's scheduler works in the host's local time, and getting that wrong
-  # means silently missing the 5 p.m. ET publication window. A period catches
-  # it either way and gives the poll log more to say.
-  - name: US DoW daily contract announcements
-    url: https://www.war.gov/News/Contracts/
-    period: 4h
-    archive: true
-    transform:
-      - css: .alist                  # PROVISIONAL
-      - text
-      - changes: verbose
-    notify:
-      - stash
-
-  # Contracts Finder and Find a Tender both publish OCDS. Prefer the API over
-  # the HTML search pages: search results churn constantly (result ordering,
-  # counts, session tokens) and will produce nothing but noise, while OCDS is
-  # structured and diffable.
-  #
-  # Verify the release-package path before running — these endpoints have moved.
-  # `jq` reduces each release to the fields that matter, so cosmetic changes in
-  # unrelated parts of the payload do not register as changes.
-  - name: UK Contracts Finder — recent awards
+  # The main flow. Central government above ~£12k and wider public sector
+  # above ~£30k, so this is where volume lives. Your closest equivalent to a
+  # daily material source, but raw: no editorial packaging, just records.
+  - name: Contracts Finder — recent awards
     url: https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search?stages=award
     period: 6h
     archive: true
@@ -76,7 +53,9 @@ checks:
     notify:
       - stash
 
-  - name: UK Find a Tender — recent awards
+  # Above-threshold procurement across all four nations. Lower volume than
+  # Contracts Finder, higher values — better story-per-notice ratio.
+  - name: Find a Tender — recent awards
     url: https://www.find-tender.service.gov.uk/api/1.0/ocdsReleasePackages
     period: 6h
     archive: true
@@ -86,7 +65,8 @@ checks:
     notify:
       - stash
 
-  # Framework recompetes: incumbency losses are material and under-covered.
+  # Framework recompetes. Incumbency losses are material, under-covered, and
+  # concentration across a handful of suppliers is a perennial story.
   - name: Crown Commercial Service — agreements
     url: https://www.crowncommercial.gov.uk/agreements
     period: 12h
@@ -98,8 +78,29 @@ checks:
     notify:
       - stash
 
-  - name: NHS England — procurement notices
-    url: https://www.england.nhs.uk/publication/procurement-notices/
+  # Devolved. Scottish contracting authorities publish here, and below-threshold
+  # material does not appear in the UK-wide feeds — so this carries notices the
+  # first two targets will never show you. Correspondingly less watched.
+  # Swap for Sell2Wales or eTendersNI if you would rather cover those instead.
+  - name: Public Contracts Scotland — awards
+    url: https://www.publiccontractsscotland.gov.uk/search/search_mainpage.aspx
+    period: 12h
+    archive: true
+    transform:
+      - css: main                    # PROVISIONAL
+      - text
+      - changes: verbose
+    notify:
+      - stash
+
+  # Actual payments, not promised awards — departments publish spend over £25k
+  # monthly. Arguably better material than award notices: what was really paid
+  # rather than what was announced. The publication page is stable HTML with
+  # dated CSV links, so a new month's release shows as a clean change.
+  #
+  # Point this at whichever department you want to follow; swap freely.
+  - name: Departmental spend over £25k — monthly release
+    url: https://www.gov.uk/government/collections/dhsc-spend-over-25-000
     period: 12h
     archive: true
     transform:
@@ -112,17 +113,21 @@ checks:
   # ---------------------------------------------------------------------
   # 6-9: individual award notices, watched for silent amendment
   #
-  # This is the highest-value block and the one nobody runs. Procurement
-  # records get quietly revised — values restated, suppliers changed, notices
-  # withdrawn — and the original is not usually recoverable afterwards.
-  # Catching one is a piece on its own, and it is where the hash chain stops
-  # being decorative: you can prove what the register said on the day.
+  # The highest-value block and the one nobody runs. Procurement records get
+  # quietly revised — values restated, suppliers changed, notices withdrawn —
+  # and the original is not usually recoverable afterwards. Catching one is a
+  # piece on its own, and it is where the hash chain stops being decorative:
+  # you can show what the register said on the day, and that you are not the
+  # one who changed it.
   #
-  # These are placeholders on purpose. Inventing notice IDs would be worse
-  # than leaving them blank. Fill them with four recent, large or contested
-  # awards — ideally a mix: one central government, one NHS, one defence, one
-  # local authority. Then set `period` tight for the first month, because
-  # amendments cluster shortly after publication.
+  # Placeholders on purpose. Inventing notice IDs would be worse than leaving
+  # them blank. Fill with four recent, large or contested awards — ideally a
+  # mix of central government, NHS, defence and local authority. Keep the
+  # period tight for the first month: amendments cluster after publication.
+  #
+  # UK-specific advantage: when one of these raises a question, FOI is
+  # available as a follow-up. Public data to FOI to story is a workflow the
+  # US equivalent did not offer you.
   # ---------------------------------------------------------------------
 
   - name: Watched award 1 — REPLACE ME
@@ -174,8 +179,8 @@ checks:
   #
   # Awards made without competition are a defined, findable category, and the
   # pattern is the story — no scoop required. Adjust the filter to whatever
-  # the current notice regime calls it; the UK notice types changed under the
-  # Procurement Act during 2025, so older query syntax may not apply.
+  # the current regime calls it; the Procurement Act changed notice types
+  # during 2025, so older query syntax may not apply.
   # ---------------------------------------------------------------------
 
   - name: UK direct awards — no competition

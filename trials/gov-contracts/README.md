@@ -1,4 +1,4 @@
-# Government contract awards — trial
+# UK government contract awards — trial
 
 A ten-target watchlist for monitoring public procurement awards, using
 `kibitzr` with the `kibitzr-archive` plugin from `tools/kibitzr-archive`.
@@ -10,10 +10,10 @@ repeatable format — not whether it predicts anything.
 ## Read this first
 
 **Nothing here has been fetched.** The environment this was written in cannot
-reach `defense.gov`, `contractsfinder.service.gov.uk`, `find-tender.service.gov.uk`
-or `crowncommercial.gov.uk` — outbound requests to those hosts are refused by
-network policy. So every URL is unverified and every selector marked
-`PROVISIONAL` is a guess.
+reach `contractsfinder.service.gov.uk`, `find-tender.service.gov.uk`,
+`crowncommercial.gov.uk`, `publiccontractsscotland.gov.uk` or `gov.uk` —
+outbound requests to those hosts are refused by network policy. So every URL
+is unverified and every selector marked `PROVISIONAL` is a guess.
 
 That is not a formality. Expect to replace all of the selectors and to correct
 at least some of the URLs, particularly the two OCDS API paths, which have
@@ -21,23 +21,22 @@ moved before. `probe.py` exists to make that quick.
 
 ## Why the targets are what they are
 
-**1–5, recurring sources.** The US daily defence announcement is the most
-valuable of these: contracts of $7.5 million or more, published each business
-day at 5 p.m. ET, naming winners. It produces material daily, so within a
-fortnight you know whether the format works.
+**1–5, recurring sources.** Contracts Finder carries the volume; Find a Tender
+carries the higher values and so the better story-per-notice ratio. Public
+Contracts Scotland is included because below-threshold Scottish material never
+reaches the UK-wide feeds, which makes it both additive and less watched.
+Departmental spend over £25k is the odd one out and possibly the best: it
+records what was actually *paid* rather than what was announced.
 
-Note that it now lives at `war.gov`, not `defense.gov` — the department was
-renamed to Department of War by executive order and the old domain redirects.
-This is a useful early lesson: kibitzr follows redirects silently, so a stale
-URL would have archived `war.gov` content while the poll log recorded a
-`defense.gov` address. Resolve every target to its canonical host before
-adding it. It is also, incidentally, exactly the kind of quiet institutional
-change the archive exists to capture.
+All five use OCDS APIs or stable publication pages rather than HTML search
+results, which churn on every request and would produce noise rather than
+signal.
 
-The UK sources use OCDS APIs rather than HTML search pages, deliberately.
-Search results churn on every request — ordering, counts, session state — and
-would generate constant noise while telling you nothing. Structured releases
-reduced through `jq` change only when the underlying awards do.
+**One structural difference to plan around.** There is no UK equivalent of a
+daily, packaged, named-winner announcement — the US defence department
+publishes one each weekday at 5 p.m. ET, and nothing here does. UK procurement
+publishes as raw notice flow. So the editorial shaping that would have come
+free is yours to do. That is a real cost, and also why the space is open.
 
 **6–9, individual award notices.** The highest-value block, and the reason
 the archive plugin exists. Procurement records get quietly revised — values
@@ -100,8 +99,8 @@ defect — catch it there, not in the notification stream.
 ```python
 from kibitzr_archive.store import ArchiveStore
 store = ArchiveStore("archive")
-store.stats("US DoD daily contract announcements")
-store.verify_chain("US DoD daily contract announcements")
+store.stats("Contracts Finder — recent awards")
+store.verify_chain("Contracts Finder — recent awards")
 ```
 
 ## Known gaps
@@ -121,4 +120,6 @@ store.verify_chain("US DoD daily contract announcements")
   default, so a target that has moved will be archived under its old URL —
   the log attests to a fetch that did not happen as described. Resolve each
   URL to its final host before adding it, and re-check the watchlist
-  periodically. The `war.gov` move happened to a target in this very config.
+  periodically. An earlier draft of this config carried a US defence target
+  that had moved from `defense.gov` to `war.gov` without the config noticing —
+  the failure is silent, which is what makes it dangerous.
