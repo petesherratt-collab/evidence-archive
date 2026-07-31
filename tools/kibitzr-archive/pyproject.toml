@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kibitzr-archive"
+version = "0.1.0"
+description = "Poll logging and raw-response retention for kibitzr"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["kibitzr>=8.0.0"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.entry-points."kibitzr.fetcher"]
+archive = "kibitzr_archive.promoter:ArchivePromoter"
+
+[tool.setuptools.packages.find]
+include = ["kibitzr_archive*"]
