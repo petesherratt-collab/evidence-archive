@@ -39,10 +39,19 @@ replace all of them.
 
 ## Known gotchas — do not rediscover these
 
-- **`sh<2` will not build on Python 3.12+.** `pip install kibitzr` fails at
-  wheel build. Use Python 3.11, or `pip install --no-deps kibitzr` plus
-  `requests cachecontrol entrypoints six click lxml cssselect`. `sh` is only
-  needed by kibitzr's git-backed page history, not by the archive plugin.
+*Provenance: revised 1 Aug 2026 on the laptop, against a real kibitzr checkout and
+a live PyPI install on Python 3.13.3. The install and promoter-priority items were
+asserted rather than executed in the first revision and were both wrong; they are
+corrected below. Transform names and the CLI entry-point hook were re-checked
+against source and hold. The redirect item remains reasoning, not a test.*
+
+- **Python 3.12+ is fine — install normally.** An earlier revision of this brief
+  claimed `sh<2` fails at wheel build on 3.12+ and told you to use Python 3.11
+  or `--no-deps`. That is wrong, and following it wastes an hour installing a
+  second interpreter. Tested on Python 3.13.3: `pip install kibitzr` exits 0 and
+  resolves `kibitzr 8.0.0`, `sh 1.14.3`, `lxml 6.1.1`, `requests 2.34.2`; the
+  package imports. `sh<2` picks up 1.14.3, which added 3.12 support. Use your
+  system Python.
 - **Kibitzr follows redirects silently.** A moved target gets archived under
   its old URL and the poll log then attests to a fetch that did not happen as
   described — the one defect a provenance record cannot carry. An earlier
@@ -55,13 +64,25 @@ replace all of them.
 - **Valid transform names** (verified against source, do not guess):
   `css`, `css-all`, `tag`, `text`, `xpath`, `xpath-all`, `json`, `jq`,
   `jinja`, `changes`, `python`, `bash`/`shell`. There is no `cut` or `sort`.
-- **`changes` styles:** `default`, `verbose`, `word`, `new`.
+- **`changes` styles:** `default`, `verbose`, `word`, `new`. Note
+  `transformer/plain_text.py:18` lowercases the value and hands it straight to
+  `PageHistory` without validating it, so a misspelled style fails silently
+  rather than erroring. Check the diff output looks right after setting one.
 - **`period`** accepts a pytimeparse string (`6h`) or seconds. Alternatively
   `schedule: {every: 6, unit: hours}` or `{every: day, at: "17:30"}` — note
   `at` uses the host's local time.
-- **Do not register another fetcher promoter at PRIORITY 20.** Kibitzr's
-  factory does `sorted(applicable, reverse=True)[0]` on `(PRIORITY, class)`
-  tuples, which raises TypeError comparing classes when priorities tie.
+- **Fetcher promoter priorities: avoid 15, not 20.** An earlier revision of this
+  brief said not to register at PRIORITY 20. That is inverted. The underlying bug
+  is real — upstream `kibitzr/fetcher/factory.py` does
+  `sorted(applicable, reverse=True)[0][1]` on `(PRIORITY, class)` tuples, so a tie
+  falls through to comparing classes and raises TypeError. But the shipped
+  priorities are `5` (Requests), `10` (base), `15` (Firefox) and `15` (Script), so
+  **20 ties with nothing and wins outright — it is the safe value. 15 is the one
+  that collides.** The two existing 15s never collide only because their
+  `is_applicable` are mutually exclusive on the presence of `url`.
+  Note this is upstream-from-PyPI behaviour, which is what task 1 installs. A
+  locally hardened checkout elsewhere on the laptop fixes it with
+  `max(key=...)`; that fix does **not** travel into this venv.
 
 ## Tasks, in order
 
@@ -70,7 +91,7 @@ replace all of them.
 ```bash
 git fetch origin claude/kibitzr-review-uotgqa
 git checkout claude/kibitzr-review-uotgqa
-python3.11 -m venv .venv && . .venv/bin/activate
+python3 -m venv .venv && . .venv/bin/activate
 pip install kibitzr
 pip install -e tools/kibitzr-archive
 cd trials/gov-contracts
