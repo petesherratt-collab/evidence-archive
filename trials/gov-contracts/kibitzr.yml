@@ -5,11 +5,17 @@
 #   6-9   individual award notices, watched for silent amendment
 #   10    a standing accountability angle (awards made without competition)
 #
-# URLS RESOLVED 1 Aug 2026 — all six real targets fetched from a UK connection.
-# Three were wrong and are corrected below; see each target's note. SELECTORS ARE
-# STILL UNVERIFIED. Run ./probe.py against each target before trusting it — that
-# tool fetches twice and shows you what churns between identical requests, which
-# is how you find a selector that produces a stable hash.
+# URLS RESOLVED AND SELECTORS TUNED 1 Aug 2026, from a UK connection. Every
+# remaining target has been fetched and its selector verified stable across
+# repeated fetches; nothing below is still a guess except the four watched-notice
+# placeholders, which cannot be probed until they hold real notice IDs.
+#
+# ROBOTS.TXT — checked for all five hosts, and it is the reason one target is
+# gone. Public Contracts Scotland disallows every agent but four search engines,
+# so it has been dropped (see below). gov.uk permits this (it disallows only
+# /search/all* and /*/print$). gca.gov.uk disallows query-string filter URLs but
+# not the clean /agreements path used here. Contracts Finder and Find a Tender
+# serve no robots.txt at all. Re-check before adding any target.
 #
 # Kibitzr follows redirects silently, so a moved target gets archived under its
 # old address and the poll log attests to a fetch that did not happen as
@@ -20,15 +26,33 @@
 # Selectors marked PROVISIONAL are educated guesses. Expect to replace them.
 # A target that cannot be stabilised is a finding, not a failure.
 #
-# STORAGE WARNING — read before first collection. The archive plugin retains the
-# RAW response, before transforms, and computes `changed` on it. So a page whose
-# markup churns on every request stores a new blob on every poll even when its
-# visible text is identical. Measured here: Public Contracts Scotland is 4.67 MB
-# raw (1.77 MB gzipped) and its __VIEWSTATE churns every request, which is
-# 1.29 GB/year from that one target. The `- text` transform fixes the alerting
-# but NOT the retention. Either narrow the fetch, drop the target, or accept the
-# cost knowingly. `kibitzr archive status` will flag these as changing on more
-# than half their polls, which is the intended signal.
+# RAW vs NORMALISED CHANGE — the most important thing to understand here.
+#
+# The archive plugin retains the RAW response, before transforms, and computes
+# the poll log's `changed` flag on it. The transforms below only affect what
+# kibitzr ALERTS on. So there are two different notions of "changed" in play:
+#
+#   raw changed      -> writes a blob, sets `changed` in the poll log
+#   normalised change -> what `changes: verbose` reports to you
+#
+# Retaining raw is correct and deliberate: it is what lets a third party
+# re-derive the extraction instead of trusting ours. But it means a page with a
+# per-response nonce or viewstate writes a blob on every single poll, and the
+# poll log calls every poll a change, while the tuned selector sits perfectly
+# still. Measured on the surviving targets:
+#
+#   Contracts Finder / Find a Tender  raw churns, jq output byte-stable
+#   GCA agreements                    raw churns (CSP nonce), `main` stable
+#   gov.uk DHSC collection            raw stable — the only one
+#
+# Consequence for task 8: `kibitzr archive status` flags targets changing on
+# more than half their polls as broken selectors. On this list that heuristic
+# will misfire on three of four. Read it alongside kibitzr's own change reports
+# before concluding a selector is wrong.
+#
+# The clean fix is for the plugin to record a second hash over the post-transform
+# content, so the log can distinguish the two. Not done — noted as the obvious
+# next change to kibitzr-archive.
 
 # NOTE: kibitzr's simple fetcher hardcodes its User-Agent (fetcher/simple.py),
 # so an identifying UA is not yet wired through. An archival crawler making an
@@ -97,32 +121,58 @@ checks:
     period: 12h
     archive: true
     transform:
-      - css: main                    # PROVISIONAL
+      - css: main                    # TUNED 1 Aug 2026 — see note below
       - text
       - changes: verbose
     notify:
       - stash
 
-  # Devolved. Scottish contracting authorities publish here, and below-threshold
-  # material does not appear in the UK-wide feeds — so this carries notices the
-  # first two targets will never show you. Correspondingly less watched.
-  # Swap for Sell2Wales or eTendersNI if you would rather cover those instead.
-  # URL verified 1 Aug 2026: 200, no redirect.
-  # BUT this is the worst target in the list for retention. It is an ASP.NET
-  # search page: 4.67 MB raw, four __VIEWSTATE fields, and the raw bytes differ
-  # on every request while the extracted text is byte-identical. See the storage
-  # warning at the top — 1.29 GB/year on its own. Find a narrower entry point
-  # (a results endpoint or per-notice URL) or drop it.
-  - name: Public Contracts Scotland — awards
-    url: https://www.publiccontractsscotland.gov.uk/search/search_mainpage.aspx
-    period: 12h
-    archive: true
-    transform:
-      - css: main                    # PROVISIONAL
-      - text
-      - changes: verbose
-    notify:
-      - stash
+  # SELECTOR TUNED 1 Aug 2026. `main` is stable at MARKUP level across four
+  # fetches spaced 20s apart, so `- text` is belt-and-braces rather than load
+  # bearing. `ul.govuk-list--frameworks` is also stable and smaller (5.8 KB of
+  # text vs 8.2 KB) if you want to shed the page furniture.
+  #
+  # The raw page churns and `main` does not, because the churn is a CSP `nonce`
+  # — a fresh random value on eight <script>/<style> tags, all outside <main>.
+  # Two consequences:
+  #   1. Every poll writes a new 22 KB blob (~16 MB/yr) even when nothing moved.
+  #   2. The poll log's `changed` will read true on almost every poll, so
+  #      `kibitzr archive status` will report this target as changing on more
+  #      than half its polls. That is the CSP nonce, NOT a broken selector.
+  # See the note on raw-vs-normalised change at the top of this file.
+  #
+  # Rate limit: this host returns HTTP 500 to back-to-back requests. Four fetches
+  # 20s apart all returned 200; probe.py's default 5s gap triggered 500s. Use
+  # --gap 20 when probing it, and leave the 12h period well alone.
+
+  # ---------------------------------------------------------------------
+  # DROPPED 1 Aug 2026 — Public Contracts Scotland. Recorded, not deleted,
+  # because "a target that cannot be stabilised is a finding" and the reasoning
+  # is worth more than the config line. Three independent reasons, any one of
+  # which is sufficient:
+  #
+  # 1. robots.txt says `User-agent: * / Disallow: /`. Only Googlebot, bingbot,
+  #    Yahoo-slurp and Msnbot are admitted. A crawler whose entire premise is
+  #    making honest evidential claims does not poll a site that has asked it
+  #    not to. This alone settles it.
+  # 2. The URL is the wrong page. search_mainpage.aspx is the search FORM: zero
+  #    notice rows, and its largest text block (345 KB) is the category filter
+  #    menu. Tuned perfectly, it would archive a filter menu twice a day.
+  # 3. It is unarchivable in shape. 4.67 MB per fetch, of which __VIEWSTATE is
+  #    2.0 MB and __EVENTVALIDATION another 60 KB, both churning per request —
+  #    1.29 GB/year of blobs for no signal.
+  #
+  # Searched for a usable entry point and found none: /search/search_notices.aspx
+  # and /rss/rss_notices.aspx both 404, Search_Switch.aspx?rss=1 redirects back
+  # to the 4.67 MB form, no <link rel=alternate> feed is advertised, and there is
+  # no api. subdomain (TLS fails).
+  #
+  # What is lost: below-threshold Scottish notices, which do not appear in the
+  # UK-wide feeds. Find a Tender covers Scotland ABOVE threshold, so the gap is
+  # specifically small Scottish awards. If that gap matters, the route is to ask
+  # PCS for permission or a data export, not to crawl them anyway.
+  # Sell2Wales and eTendersNI are untested — check their robots.txt FIRST.
+  # ---------------------------------------------------------------------
 
   # Actual payments, not promised awards — departments publish spend over £25k
   # monthly. Arguably better material than award notices: what was really paid
@@ -138,7 +188,14 @@ checks:
     period: 12h
     archive: true
     transform:
-      - css: main                    # PROVISIONAL
+      # SELECTOR TUNED 1 Aug 2026. `#contents` is the gov.uk contents component
+      # and holds all 97 publication links plus their dates — the payload. It is
+      # stable at markup level, and tighter than `main` (10,406 vs 10,826 chars),
+      # which only adds the collection title and standfirst. `main` is the
+      # fallback if gov.uk ever renames the component.
+      # This is the one target whose RAW bytes are stable too, so it is the only
+      # one that will not write a blob on every poll.
+      - css: '#contents'
       - text
       - changes: verbose
     notify:
@@ -158,6 +215,13 @@ checks:
   # them blank. Fill with four recent, large or contested awards — ideally a
   # mix of central government, NHS, defence and local authority. Keep the
   # period tight for the first month: amendments cluster after publication.
+  #
+  # These four keep `PROVISIONAL` selectors because they cannot be probed until
+  # they hold real notice IDs — a placeholder URL has nothing to tune against.
+  # When you fill them, run probe.py on each before the first collection. Do not
+  # assume they behave like the targets above: a Contracts Finder NOTICE page is
+  # a different template from the OCDS API endpoint, and nothing verified here
+  # carries over to it.
   #
   # LEAD, found 1 Aug 2026 while resolving URLs: Contracts Finder tags releases
   # `award` or `awardUpdate`, and 18 of 100 in a single sample were awardUpdate.

@@ -34,7 +34,13 @@ except ImportError:
     sys.exit("pip install requests lxml")
 
 
-USER_AGENT = "policy-archive-probe/0.1 (+https://example.org/about-this-crawler)"
+USER_AGENT = (
+    "evidence-archive-probe/0.1 "
+    "(+https://github.com/petesherratt-collab/evidence-archive)"
+)
+# Some hosts return 500 to back-to-back requests — gca.gov.uk does — so a probe
+# that looks like a broken page is sometimes just an impatient one. Raise --gap
+# before concluding a target is down.
 DEFAULT_GAP = 5
 
 
