@@ -5,20 +5,30 @@
 #   6-9   individual award notices, watched for silent amendment
 #   10    a standing accountability angle (awards made without competition)
 #
-# IMPORTANT: every URL and selector below is UNVERIFIED. The environment this
-# was written in cannot reach gov.uk domains, so nothing here has been fetched.
-# Run ./probe.py against each target before trusting it — that tool fetches
-# twice and shows you what churns between identical requests, which is how you
-# find a selector that produces a stable hash.
+# URLS RESOLVED 1 Aug 2026 — all six real targets fetched from a UK connection.
+# Three were wrong and are corrected below; see each target's note. SELECTORS ARE
+# STILL UNVERIFIED. Run ./probe.py against each target before trusting it — that
+# tool fetches twice and shows you what churns between identical requests, which
+# is how you find a selector that produces a stable hash.
 #
-# Resolve every URL to its canonical host first. Kibitzr follows redirects
-# silently, so a moved target gets archived under its old address and the poll
-# log attests to a fetch that did not happen as described. This is not
-# hypothetical: the US defence target this list previously carried had moved
-# from defense.gov to war.gov without the config noticing.
+# Kibitzr follows redirects silently, so a moved target gets archived under its
+# old address and the poll log attests to a fetch that did not happen as
+# described. This is not hypothetical: it had already happened twice in this
+# file — the US defence target that moved from defense.gov to war.gov, and the
+# Crown Commercial Service target below, which now 301s to gca.gov.uk.
 #
 # Selectors marked PROVISIONAL are educated guesses. Expect to replace them.
 # A target that cannot be stabilised is a finding, not a failure.
+#
+# STORAGE WARNING — read before first collection. The archive plugin retains the
+# RAW response, before transforms, and computes `changed` on it. So a page whose
+# markup churns on every request stores a new blob on every poll even when its
+# visible text is identical. Measured here: Public Contracts Scotland is 4.67 MB
+# raw (1.77 MB gzipped) and its __VIEWSTATE churns every request, which is
+# 1.29 GB/year from that one target. The `- text` transform fixes the alerting
+# but NOT the retention. Either narrow the fetch, drop the target, or accept the
+# cost knowingly. `kibitzr archive status` will flag these as changing on more
+# than half their polls, which is the intended signal.
 
 # NOTE: kibitzr's simple fetcher hardcodes its User-Agent (fetcher/simple.py),
 # so an identifying UA is not yet wired through. An archival crawler making an
@@ -48,27 +58,42 @@ checks:
     period: 6h
     archive: true
     transform:
-      - jq: '[.releases[] | {ocid, date, title: .tender.title, buyer: .buyer.name, value: .awards[]?.value, supplier: [.awards[]?.suppliers[]?.name]}] | sort_by(.ocid)'
+      - jq: '[.releases[] | {ocid, date, title: .tender.title, buyer: .buyer.name, values: [.awards[]?.value], suppliers: [.awards[]?.suppliers[]?.name]}] | sort_by(.ocid)'
       - changes: verbose
     notify:
       - stash
 
   # Above-threshold procurement across all four nations. Lower volume than
   # Contracts Finder, higher values — better story-per-notice ratio.
+  #
+  # jq FIXED 1 Aug 2026 — two defects, both verified against live payloads:
+  #   1. `value: .awards[]?.value` emits one row PER AWARD, not per release.
+  #      Find a Tender has releases carrying up to 94 awards, so 100 releases
+  #      produced 170 rows. Now aggregated into `values: [...]`, one row each.
+  #   2. `select(.tag[]? == "award")` passes a release once per matching tag,
+  #      and 61 of 100 releases here carry two tags. Now `index("award")`.
+  # Contracts Finder above had defect 1 latent — it happens to have exactly one
+  # award per release today, so it was masked. Fixed there too.
   - name: Find a Tender — recent awards
     url: https://www.find-tender.service.gov.uk/api/1.0/ocdsReleasePackages
     period: 6h
     archive: true
     transform:
-      - jq: '[.releases[] | select(.tag[]? == "award") | {ocid, date, title: .tender.title, buyer: .buyer.name, value: .awards[]?.value, supplier: [.awards[]?.suppliers[]?.name]}] | sort_by(.ocid)'
+      - jq: '[.releases[] | select((.tag // []) | index("award")) | {ocid, date, title: .tender.title, buyer: .buyer.name, values: [.awards[]?.value], suppliers: [.awards[]?.suppliers[]?.name]}] | sort_by(.ocid)'
       - changes: verbose
     notify:
       - stash
 
   # Framework recompetes. Incumbency losses are material, under-covered, and
   # concentration across a handful of suppliers is a perennial story.
-  - name: Crown Commercial Service — agreements
-    url: https://www.crowncommercial.gov.uk/agreements
+  # URL CORRECTED 1 Aug 2026: www.crowncommercial.gov.uk/agreements 301s to
+  # gca.gov.uk — CCS is now the Government Commercial Agency. The old address
+  # still resolves, which is exactly the silent-redirect trap: it would have
+  # archived fine while attesting to the wrong host.
+  # Churn check: raw bytes differ between two fetches 2s apart, extracted text
+  # is identical. 137 KB raw / 22 KB gzipped, so the retention cost is tolerable.
+  - name: Government Commercial Agency — agreements
+    url: https://www.gca.gov.uk/agreements
     period: 12h
     archive: true
     transform:
@@ -82,6 +107,12 @@ checks:
   # material does not appear in the UK-wide feeds — so this carries notices the
   # first two targets will never show you. Correspondingly less watched.
   # Swap for Sell2Wales or eTendersNI if you would rather cover those instead.
+  # URL verified 1 Aug 2026: 200, no redirect.
+  # BUT this is the worst target in the list for retention. It is an ASP.NET
+  # search page: 4.67 MB raw, four __VIEWSTATE fields, and the raw bytes differ
+  # on every request while the extracted text is byte-identical. See the storage
+  # warning at the top — 1.29 GB/year on its own. Find a narrower entry point
+  # (a results endpoint or per-notice URL) or drop it.
   - name: Public Contracts Scotland — awards
     url: https://www.publiccontractsscotland.gov.uk/search/search_mainpage.aspx
     period: 12h
@@ -99,8 +130,11 @@ checks:
   # dated CSV links, so a new month's release shows as a clean change.
   #
   # Point this at whichever department you want to follow; swap freely.
+  # URL CORRECTED 1 Aug 2026: dhsc-spend-over-25-000 was a 404 with no redirect
+  # record on gov.uk — the slug is dhsc-spending-over-25000. Verified 200, and
+  # the only target in this file whose raw bytes are stable across two fetches.
   - name: Departmental spend over £25k — monthly release
-    url: https://www.gov.uk/government/collections/dhsc-spend-over-25-000
+    url: https://www.gov.uk/government/collections/dhsc-spending-over-25000
     period: 12h
     archive: true
     transform:
@@ -124,6 +158,16 @@ checks:
   # them blank. Fill with four recent, large or contested awards — ideally a
   # mix of central government, NHS, defence and local authority. Keep the
   # period tight for the first month: amendments cluster after publication.
+  #
+  # LEAD, found 1 Aug 2026 while resolving URLs: Contracts Finder tags releases
+  # `award` or `awardUpdate`, and 18 of 100 in a single sample were awardUpdate.
+  # That is a published amendment signal, already in the feed, free to collect.
+  # It does not replace this block — an amendment the register declares is not
+  # the silent revision this trial is looking for, and the tag tells you nothing
+  # about what changed. But it is a good way to CHOOSE which notices to watch:
+  # pull the awardUpdate ocids from target 1 and fill these slots with buyers
+  # that amend often. Note this is also why targets 1 and 10 must keep
+  # `stages=award` — dropping it pulls in tender/tenderAmendment noise too.
   #
   # UK-specific advantage: when one of these raises a question, FOI is
   # available as a follow-up. Public data to FOI to story is a workflow the
@@ -178,17 +222,30 @@ checks:
   # 10: standing accountability angle
   #
   # Awards made without competition are a defined, findable category, and the
-  # pattern is the story — no scoop required. Adjust the filter to whatever
-  # the current regime calls it; the Procurement Act changed notice types
-  # during 2025, so older query syntax may not apply.
+  # pattern is the story — no scoop required.
+  #
+  # FIXED 1 Aug 2026. This previously used `&procedure=direct` in the URL. That
+  # parameter does not exist — Contracts Finder silently ignores unknown query
+  # parameters and returns the unfiltered set. Verified by substituting
+  # `procedure=TOTAL_NONSENSE_XYZ`, which returns a byte-identical result to no
+  # parameter at all. As written, this target was an exact duplicate of target 1:
+  # double the storage, correlated changes on both, and no direct-awards signal.
+  #
+  # `stages=award` IS honoured — it changes both the tag mix and the result set —
+  # so the failure was specific to `procedure`, not to query filtering generally.
+  # Assume nothing else in a gov.uk query string filters until you have tested it
+  # the same way.
+  #
+  # The filter now runs in jq against .tender.procurementMethod, which is present
+  # in the payload. On the sample checked, 8 of 100 award releases were `direct`.
   # ---------------------------------------------------------------------
 
   - name: UK direct awards — no competition
-    url: https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search?stages=award&procedure=direct
+    url: https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search?stages=award
     period: 12h
     archive: true
     transform:
-      - jq: '[.releases[] | {ocid, date, buyer: .buyer.name, value: .awards[]?.value, supplier: [.awards[]?.suppliers[]?.name], method: .tender.procurementMethod}] | sort_by(.ocid)'
+      - jq: '[.releases[] | select(.tender.procurementMethod == "direct") | {ocid, date, buyer: .buyer.name, values: [.awards[]?.value], suppliers: [.awards[]?.suppliers[]?.name], method: .tender.procurementMethod}] | sort_by(.ocid)'
       - changes: verbose
     notify:
       - stash
