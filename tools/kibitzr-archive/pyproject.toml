@@ -20,5 +20,8 @@ archive = "kibitzr_archive.promoter:ArchivePromoter"
 [project.entry-points."kibitzr.cli"]
 archive = "kibitzr_archive.cli:extend_cli"
 
+[project.entry-points."kibitzr.before_start"]
+archive = "kibitzr_archive.hook:before_start"
+
 [tool.setuptools.packages.find]
 include = ["kibitzr_archive*"]

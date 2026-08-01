@@ -45,14 +45,20 @@
 #   GCA agreements                    raw churns (CSP nonce), `main` stable
 #   gov.uk DHSC collection            raw stable — the only one
 #
-# Consequence for task 8: `kibitzr archive status` flags targets changing on
-# more than half their polls as broken selectors. On this list that heuristic
-# will misfire on three of four. Read it alongside kibitzr's own change reports
-# before concluding a selector is wrong.
+# RESOLVED 1 Aug 2026. The plugin now records both. Every poll whose transform
+# chain produces content also gets a `normalisation` row holding the hash of the
+# post-transform document, on its own chain. `kibitzr archive status` reports the
+# two side by side as `raw chg` and `doc chg`, and judges selectors on the second,
+# so the "changing on over half its polls" warning no longer misfires on the three
+# targets here that churn at the raw level.
 #
-# The clean fix is for the plugin to record a second hash over the post-transform
-# content, so the log can distinguish the two. Not done — noted as the obvious
-# next change to kibitzr-archive.
+# Two things follow for this trial:
+#   - Anchor with `kibitzr archive head`, which now emits one value committing to
+#     both chains. Anchoring only one would leave the other rewritable.
+#   - Each normalised row records a fingerprint of the transform rules that
+#     produced it. If you retune a selector mid-run — likely, given slots 6-9 are
+#     still unfilled — `status` will say so, and the diffs from that point are
+#     partly yours rather than theirs. Retune before first collection if you can.
 
 # NOTE: kibitzr's simple fetcher hardcodes its User-Agent (fetcher/simple.py),
 # so an identifying UA is not yet wired through. An archival crawler making an

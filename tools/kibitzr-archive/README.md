@@ -2,8 +2,9 @@
 
 Poll logging and raw-response retention for [kibitzr](https://github.com/kibitzr/kibitzr).
 
-A kibitzr plugin, not a fork. It installs through the `kibitzr.fetcher`
-entry point and applies to any kibitzr tree, hardened or stock.
+A kibitzr plugin, not a fork. It installs through the `kibitzr.fetcher`,
+`kibitzr.cli` and `kibitzr.before_start` entry points, and applies to any
+kibitzr tree, hardened or stock.
 
 ## What it adds, and why
 
@@ -72,6 +73,47 @@ notifiers behave exactly as before.
 `archive/blobs/` — gzipped, content-addressed, write-once. Deduplicated by
 digest, so a document flapping between two states costs storage once.
 
+`archive/polls.db`, table `normalisation` — one row per poll whose transform
+chain produced content, holding the hash of the document *after* selection:
+
+| column | notes |
+|---|---|
+| `poll_id` | the poll this was derived from |
+| `content_sha256` | hash of the post-transform document |
+| `transform_id` | fingerprint of the transform rules that produced it |
+| `changed` | against the last normalised observation |
+| `prev_hash`, `record_hash` | its own chain, separate from the poll chain |
+
+No blob is written for normalised content. The raw response is already
+retained and the rules are fingerprinted, so it is re-derivable.
+
+### Raw change and document change are not the same thing
+
+The poll log's `changed` is computed on the response as fetched, which is
+correct for retention and misleading as a signal. Real sites move their raw
+bytes on every single request — CSP nonces, ASP.NET `__VIEWSTATE`, rotating
+banners — while the content you actually selected sits perfectly still.
+Measured on a UK procurement watchlist, three of four live targets churned at
+the raw level and none of them had moved.
+
+So there are two chains, answering two questions:
+
+```
+poll chain          did the bytes we fetched change?
+normalisation chain did the content we selected change?
+```
+
+`kibitzr archive status` reports both as `raw chg` and `doc chg`, and judges
+selectors on the second.
+
+**Where the hash is taken matters.** A pipeline ending in `changes` emits a
+diff, and an empty one when nothing moved. Hashing the end of the pipeline
+would hash a report about the document rather than the document, and would
+record the same value for "unchanged" and "changed back". The capture is
+therefore taken at the *input* to the first reporting transform — the
+normalised document — or at the end of the pipeline when there is no
+reporting transform.
+
 ## The hash chain
 
 Each poll's `record_hash` covers its identifying fields plus the previous
@@ -80,13 +122,25 @@ recompute it. Editing or deleting a logged row breaks the chain from that
 point on:
 
 ```python
-store.verify_chain("Example Usage Policy")   # (True, None) if intact
-store.head("Example Usage Policy")           # current chain head
+store.verify_chain("Example")                # poll chain
+store.verify_normalisation_chain("Example")  # normalisation chain
+store.combined_head("Example")               # the value to anchor
 ```
 
-`head()` is the anchoring seam. Submitting it for external timestamping
-anchors every poll recorded up to that point — one anchor per check per
-batch, rather than one per observation.
+`combined_head()` is the anchoring seam. There are two chains, and anchoring
+one would leave the other free to be rewritten, so it commits to both:
+
+```
+sha256('{"norm":"<norm_head>","poll":"<poll_head>","v":1}')
+```
+
+with an unanchored chain represented by the all-zero genesis value. Submitting
+it for external timestamping anchors every poll recorded up to that point —
+one anchor per check per batch, rather than one per observation.
+
+The chains also cross-check each other. Rewriting a normalised hash to conceal
+an amendment breaks the normalisation chain while the poll chain still
+verifies, and the retained raw response still contains the original text.
 
 This matters because **git history is not evidence**. Kibitzr initialises
 each page repo with a hardcoded `user.email` and `user.name`, commits are
@@ -99,19 +153,27 @@ at.
 
 ## Deliberate limits
 
-- **Normalisation is not versioned.** If you change a check's selectors,
-  the extracted text changes for reasons that have nothing to do with the
-  publisher, and nothing here records which rules produced which capture.
-  Retaining the raw response means the extraction can be re-derived after
-  the fact, which mitigates but does not solve it. Open Terms Archive
-  solves this properly with dated declaration and filter histories.
+- **Normalisation is fingerprinted, not versioned.** Every normalised
+  observation records a `transform_id` — a hash of the transform rules that
+  produced it — so retuning a selector is *detectable*: `status` warns when a
+  check has more than one rule set in its series, and the fingerprint is
+  inside the chain, so the keeper cannot retune and deny it. But a hash is not
+  a history. It tells you the rules changed, not what they were or when they
+  were valid. Open Terms Archive solves that properly, with dated declaration
+  and filter histories and an explicit `isTechnicalUpgrade` marker.
 - **Archiving never fails a check.** A storage error is logged and
-  swallowed; monitoring keeps running. Watch the logs rather than assuming
-  silence means success.
-- **Growth rate is your normalisation alarm.** `store.stats()` reports
-  polls, changes, blobs and bytes. A target reporting far more changes
-  than its document plausibly has is a target with broken selectors —
-  catch it there, not in your inbox.
+  swallowed; monitoring keeps running, and the transform wrapper re-raises
+  nothing. Watch the logs rather than assuming silence means success.
+- **The `before_start` hook reaches into kibitzr's pipeline.** It wraps one
+  callable in `TransformPipeline.transforms`, which is an internal. It
+  degrades safely — an uninspectable pipeline logs a warning and records raw
+  polls only — but a kibitzr refactor could silently stop normalised hashes
+  being recorded. `status` lists checks with no normalised rows for exactly
+  this reason.
+- **Concurrency is untested.** A normalised row is linked to the most recent
+  poll for its check. Kibitzr runs checks sequentially, so this holds today;
+  it would not survive a threaded scheduler without passing the poll id
+  through explicitly.
 
 ## Tests
 
