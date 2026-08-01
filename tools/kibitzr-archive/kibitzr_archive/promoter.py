@@ -28,6 +28,16 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_ROOT = "archive"
 
+#: Sent on every archived fetch. An archive whose standing rests on having
+#: collected openly has to say who is collecting; kibitzr's own fetcher
+#: hardcodes ``Kibitzr/<version>``, which identifies the tool but not the
+#: operator or a way to reach them. Override per check or globally with
+#: ``user_agent``.
+DEFAULT_USER_AGENT = (
+    "EvidenceArchive/0.1 "
+    "(+https://github.com/petesherratt-collab/evidence-archive)"
+)
+
 _STORES = {}
 
 
@@ -46,6 +56,21 @@ def archive_root(conf):
     return DEFAULT_ROOT
 
 
+def user_agent(conf):
+    """Resolve the User-Agent for an archived fetch.
+
+    ``user_agent: false`` deliberately falls back to kibitzr's own header,
+    for the case where a site treats an unknown agent worse than a known
+    one. That is a choice worth making explicitly rather than by default.
+    """
+    setting = conf.get("user_agent", None)
+    if setting is None:
+        return DEFAULT_USER_AGENT
+    if setting is False:
+        return None
+    return str(setting)
+
+
 class CapturingSessionFetcher(SessionFetcher):
     """SessionFetcher that keeps the last response object.
 
@@ -58,6 +83,11 @@ class CapturingSessionFetcher(SessionFetcher):
     def __init__(self, conf):
         super().__init__(conf)
         self.last_response = None
+        agent = user_agent(conf)
+        if agent is not None:
+            # SessionFetcher sets 'User-agent'; requests' header dict is
+            # case-insensitive, so this replaces rather than duplicates it.
+            self.session.headers["User-Agent"] = agent
         self.session.hooks["response"].append(self._capture)
 
     def _capture(self, response, *args, **kwargs):  # pylint: disable=unused-argument

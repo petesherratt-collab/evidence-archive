@@ -56,6 +56,30 @@ The plugin wraps the fetch, records the observation, and passes content
 through unmodified. The `changes` transform, its git history and all
 notifiers behave exactly as before.
 
+### Identifying the collector
+
+kibitzr sends `User-agent: Kibitzr/<version>`, which names the tool but not
+whoever is running it. An archive that expects to be believed should say who
+collected it and how to make contact, so every archived fetch instead sends:
+
+```
+EvidenceArchive/0.1 (+https://github.com/petesherratt-collab/evidence-archive)
+```
+
+Override it per check, or opt out by name:
+
+```yaml
+    user_agent: "YourArchive/1.0 (+mailto:you@example.org)"
+    user_agent: false             # fall back to kibitzr's own header
+```
+
+Set this before the first poll. It is not a property that can be added to
+records afterwards: fetches made under an anonymous agent were made under an
+anonymous agent, whatever the config says later.
+
+Only the requests path is covered. A check routed through Firefox sends the
+browser's UA, and this setting does not reach it.
+
 ## What gets stored
 
 `archive/polls.db` — one row per poll, always:

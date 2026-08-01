@@ -1,0 +1,27 @@
+[Unit]
+Description=Evidence archive — UK government contract awards collection
+Documentation=https://github.com/petesherratt-collab/evidence-archive
+# Do not start before the network is reachable; a burst of DNS failures at boot
+# would otherwise be recorded as failed polls that say more about this laptop
+# than about the targets.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/peters/evidence-collection
+ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr run
+# kibitzr keeps its own schedule from each check's `period`, so this is a
+# long-lived process rather than a timer. A timer firing `once` would ignore
+# the per-check periods and poll every target at the same rate.
+Restart=always
+RestartSec=60
+# The archive is the point of the process; never let a restart loop truncate it.
+StartLimitIntervalSec=0
+
+# Collection is I/O-bound and should yield to anything interactive.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

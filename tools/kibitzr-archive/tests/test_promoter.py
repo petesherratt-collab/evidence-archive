@@ -16,12 +16,14 @@ class _State:
     body = "<html>original</html>"
     status = 200
     etag = 'W/"v1"'
+    last_agent = None
 
 
 @pytest.fixture
 def server():
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - required by BaseHTTPRequestHandler
+            _State.last_agent = self.headers.get("User-Agent")
             payload = _State.body.encode("utf-8")
             self.send_response(_State.status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -49,6 +51,7 @@ def isolated_store(tmp_path, monkeypatch):
     _State.body = "<html>original</html>"
     _State.status = 200
     _State.etag = 'W/"v1"'
+    _State.last_agent = None
 
 
 def test_archive_promoter_is_selected_only_when_opted_in(server):
@@ -126,3 +129,31 @@ def test_failed_fetch_is_recorded_as_an_attempt(server):
     assert row["ok"] == 0
     assert row["error"]
     assert fetcher.store.verify_chain("check") == (True, None)
+
+
+def test_archived_fetch_identifies_itself(server):
+    """The default agent names the project and gives a way to reach it.
+
+    An archive that claims it collected openly has to have said who it was
+    at fetch time; that cannot be added to the record afterwards.
+    """
+    fetcher_factory({"name": "a", "url": server, "archive": True}).fetch()
+
+    assert _State.last_agent == promoter_module.DEFAULT_USER_AGENT
+    assert "Kibitzr/" not in _State.last_agent
+
+
+def test_user_agent_can_be_overridden_per_check(server):
+    conf = {"name": "a", "url": server, "archive": True,
+            "user_agent": "Example/2.0 (+mailto:someone@example.org)"}
+    fetcher_factory(conf).fetch()
+
+    assert _State.last_agent == "Example/2.0 (+mailto:someone@example.org)"
+
+
+def test_user_agent_false_falls_back_to_kibitzr(server):
+    """Opting out is available but has to be asked for by name."""
+    conf = {"name": "a", "url": server, "archive": True, "user_agent": False}
+    fetcher_factory(conf).fetch()
+
+    assert _State.last_agent.startswith("Kibitzr/")

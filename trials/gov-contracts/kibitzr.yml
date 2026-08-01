@@ -60,10 +60,19 @@
 #     still unfilled — `status` will say so, and the diffs from that point are
 #     partly yours rather than theirs. Retune before first collection if you can.
 
-# NOTE: kibitzr's simple fetcher hardcodes its User-Agent (fetcher/simple.py),
-# so an identifying UA is not yet wired through. An archival crawler making an
-# evidential claim should say who it is. Patch that line before the archive is
-# used for anything load-bearing.
+# RESOLVED 1 Aug 2026, before the first collected poll. kibitzr's simple fetcher
+# hardcodes `User-agent: Kibitzr/<version>`, which names the tool but not the
+# operator and offers no way to be contacted. The plugin now sets an identifying
+# agent on every archived fetch, overridable per check with `user_agent`:
+#
+#   EvidenceArchive/0.1 (+https://github.com/petesherratt-collab/evidence-archive)
+#
+# This had to be settled before collection started, not after. An archive whose
+# standing rests on having collected openly cannot acquire that property
+# retroactively — records gathered under an anonymous agent stay that way.
+#
+# NOT covered: the Firefox path sends the browser's own UA. No target here uses
+# it, but wire it before one does.
 
 checks:
 
@@ -90,8 +99,6 @@ checks:
     transform:
       - jq: '[.releases[] | {ocid, date, title: .tender.title, buyer: .buyer.name, values: [.awards[]?.value], suppliers: [.awards[]?.suppliers[]?.name]}] | sort_by(.ocid)'
       - changes: verbose
-    notify:
-      - stash
 
   # Above-threshold procurement across all four nations. Lower volume than
   # Contracts Finder, higher values — better story-per-notice ratio.
@@ -111,8 +118,6 @@ checks:
     transform:
       - jq: '[.releases[] | select((.tag // []) | index("award")) | {ocid, date, title: .tender.title, buyer: .buyer.name, values: [.awards[]?.value], suppliers: [.awards[]?.suppliers[]?.name]}] | sort_by(.ocid)'
       - changes: verbose
-    notify:
-      - stash
 
   # Framework recompetes. Incumbency losses are material, under-covered, and
   # concentration across a handful of suppliers is a perennial story.
@@ -130,8 +135,6 @@ checks:
       - css: main                    # TUNED 1 Aug 2026 — see note below
       - text
       - changes: verbose
-    notify:
-      - stash
 
   # SELECTOR TUNED 1 Aug 2026. `main` is stable at MARKUP level across four
   # fetches spaced 20s apart, so `- text` is belt-and-braces rather than load
@@ -204,8 +207,6 @@ checks:
       - css: '#contents'
       - text
       - changes: verbose
-    notify:
-      - stash
 
   # ---------------------------------------------------------------------
   # 6-9: individual award notices, watched for silent amendment
@@ -244,49 +245,56 @@ checks:
   # US equivalent did not offer you.
   # ---------------------------------------------------------------------
 
-  - name: Watched award 1 — REPLACE ME
-    url: https://www.contractsfinder.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
-    period: 3h
-    archive: true
-    transform:
-      - css: main                    # PROVISIONAL
-      - text
-      - changes: verbose
-    notify:
-      - stash
+  # DISABLED FOR COLLECTION 1 Aug 2026 — these four are commented out, not
+  # deleted. A placeholder URL does not just fail to collect: it records a
+  # failed poll, on-chain, under a check name that describes a notice which
+  # does not exist. That is a false entry in an archive whose whole claim is
+  # that its entries are true. Uncomment as each slot gets a real notice ID,
+  # and run probe.py against it first — see the block comment above.
 
-  - name: Watched award 2 — REPLACE ME
-    url: https://www.contractsfinder.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
-    period: 3h
-    archive: true
-    transform:
-      - css: main                    # PROVISIONAL
-      - text
-      - changes: verbose
-    notify:
-      - stash
-
-  - name: Watched award 3 — REPLACE ME
-    url: https://www.find-tender.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
-    period: 3h
-    archive: true
-    transform:
-      - css: main                    # PROVISIONAL
-      - text
-      - changes: verbose
-    notify:
-      - stash
-
-  - name: Watched award 4 — REPLACE ME
-    url: https://www.find-tender.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
-    period: 3h
-    archive: true
-    transform:
-      - css: main                    # PROVISIONAL
-      - text
-      - changes: verbose
-    notify:
-      - stash
+  # - name: Watched award 1 — REPLACE ME
+  #   url: https://www.contractsfinder.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
+  #   period: 3h
+  #   archive: true
+  #   transform:
+  #     - css: main                    # PROVISIONAL
+  #     - text
+  #     - changes: verbose
+  #   notify:
+  #     - stash
+  #
+  # - name: Watched award 2 — REPLACE ME
+  #   url: https://www.contractsfinder.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
+  #   period: 3h
+  #   archive: true
+  #   transform:
+  #     - css: main                    # PROVISIONAL
+  #     - text
+  #     - changes: verbose
+  #   notify:
+  #     - stash
+  #
+  # - name: Watched award 3 — REPLACE ME
+  #   url: https://www.find-tender.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
+  #   period: 3h
+  #   archive: true
+  #   transform:
+  #     - css: main                    # PROVISIONAL
+  #     - text
+  #     - changes: verbose
+  #   notify:
+  #     - stash
+  #
+  # - name: Watched award 4 — REPLACE ME
+  #   url: https://www.find-tender.service.gov.uk/notice/REPLACE-WITH-NOTICE-ID
+  #   period: 3h
+  #   archive: true
+  #   transform:
+  #     - css: main                    # PROVISIONAL
+  #     - text
+  #     - changes: verbose
+  #   notify:
+  #     - stash
 
   # ---------------------------------------------------------------------
   # 10: standing accountability angle
@@ -317,5 +325,3 @@ checks:
     transform:
       - jq: '[.releases[] | select(.tender.procurementMethod == "direct") | {ocid, date, buyer: .buyer.name, values: [.awards[]?.value], suppliers: [.awards[]?.suppliers[]?.name], method: .tender.procurementMethod}] | sort_by(.ocid)'
       - changes: verbose
-    notify:
-      - stash
