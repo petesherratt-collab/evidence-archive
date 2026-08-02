@@ -1,0 +1,15 @@
+[Unit]
+Description=Upgrade pending evidence-archive timestamp proofs
+Documentation=https://github.com/petesherratt-collab/evidence-archive
+
+[Timer]
+# Twice daily, and offset from the anchoring run: a proof taken this morning
+# cannot be upgraded until a Bitcoin block has committed to it, so upgrading
+# immediately after stamping would always be a no-op.
+OnCalendar=*-*-* 06,18:20:00
+Persistent=true
+RandomizedDelaySec=20m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

@@ -236,6 +236,38 @@ Each interval is judged against the schedule in force when it opened, not the
 current one. Checks with no schedule declared are listed separately as
 unjudgeable rather than reported as fine.
 
+## Anchoring
+
+```
+kibitzr archive anchor           # commit current heads to an external timestamp
+kibitzr archive anchors          # proofs taken, and what no proof covers yet
+kibitzr archive anchor-upgrade   # calendar attestation -> Bitcoin attestation
+kibitzr archive anchor-verify    # check a proof still holds
+```
+
+Anchoring uses OpenTimestamps rather than an RFC 3161 authority, because a TSA
+token is only as good as continued trust in that authority, and importing a new
+party to trust is the wrong shape for an archive built to remove that need.
+
+What gets stamped is a **manifest**, not a bare digest: canonical JSON naming
+each check and its constituent chain heads, so someone holding the proof can see
+what was attested without running any of this code. The component heads are
+recorded alongside `combined_head` so an anchor stays checkable even after the
+combining formula changes version.
+
+Proofs arrive **pending** — attested by the calendar servers — and become
+Bitcoin-attested once a block confirms, hours later. `anchors` reports which
+state each proof is in and never describes a pending proof as complete.
+
+`anchors` also reports how many polls no proof covers yet. That number is the
+archive's actual exposure: those observations have no external evidence of when
+they existed, and unlike a missed poll, elapsed unattested time cannot be
+recovered afterwards.
+
+The verification specification is `deploy/VERIFYING.md`, and
+`deploy/verify_independently.py` implements it using only the standard library,
+sharing no code with this package.
+
 This matters because **git history is not evidence**. Kibitzr initialises
 each page repo with a hardcoded `user.email` and `user.name`, commits are
 unsigned, and commit timestamps come from the local clock — all rewritable

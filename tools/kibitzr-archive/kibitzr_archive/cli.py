@@ -6,6 +6,10 @@
     kibitzr archive annotations     assertions about the log, incl. corrections
     kibitzr archive annotate        append a correction; never edits a row
     kibitzr archive gaps            holes in a series, read against intent
+    kibitzr archive anchor          commit the heads to an external timestamp
+    kibitzr archive anchors         proofs taken, and what is not yet covered
+    kibitzr archive anchor-upgrade  calendar attestation -> Bitcoin attestation
+    kibitzr archive anchor-verify   check a proof still holds
 """
 import json
 import os
@@ -281,6 +285,134 @@ def extend_cli(group):
                 click.echo(f"  - {check}")
         if not found:
             click.echo("\nNo gaps beyond tolerance in the judgeable checks.")
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--ots", help="Path to the OpenTimestamps client")
+    @click.argument("name", nargs=-1)
+    def anchor(root, ots, name):
+        """Commit the current chain heads to an external timestamp
+
+        The chains prove the archive is internally consistent. They prove
+        nothing about when it existed — a consistent history can be fabricated
+        after the fact. This is the step that makes the difference, and the one
+        whose delay is unrecoverable: time that passes unattested cannot be
+        proven retroactively.
+        """
+        from .anchor import AnchorError, stamp  # noqa: PLC0415
+
+        store = _open(root)
+        names = list(name) or _check_names(store)
+        try:
+            result = stamp(store, names, ots=ots)
+        except AnchorError as exc:
+            raise click.ClickException(str(exc))
+
+        click.echo(f"Manifest  {result['manifest_ref']}")
+        click.echo(f"          sha256 {result['manifest_sha256']}")
+        for check in result["checks"]:
+            click.echo(f"  anchored  {check}")
+        if result["status"] == "failed":
+            click.echo(f"\nStamping failed: {result['output']}", err=True)
+            click.echo("Recorded as failed rather than silently skipped.",
+                       err=True)
+            sys.exit(1)
+        click.echo(
+            "\nProof is PENDING: it currently rests on the calendar servers, "
+            "not\non Bitcoin. Run `archive anchor-upgrade` in a few hours to "
+            "convert it."
+        )
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    def anchors(root):
+        """Proofs taken, and how much is not yet covered by one"""
+        store = _open(root)
+        rows = store.anchors()
+        if rows:
+            click.echo(f"{'when':<21} {'status':<9} {'check':<34} {'head':>12}")
+            click.echo("-" * 80)
+            for row in rows:
+                click.echo(
+                    f"{row['anchored_at']:<21} {row['status']:<9} "
+                    f"{row['check_name'][:34]:<34} "
+                    f"{row['combined_head'][:12]:>12}"
+                )
+        else:
+            click.echo("Nothing anchored yet.")
+
+        click.echo("\nPolls not yet covered by any proof:")
+        exposed = 0
+        for check in _check_names(store):
+            count = store.unanchored_polls(check)
+            exposed += count
+            click.echo(f"  {count:>4}  {check}")
+        click.echo(f"  {exposed:>4}  total")
+        if exposed:
+            click.echo(
+                "\nThese observations have no external evidence of when they "
+                "existed.\nThat is recoverable only by anchoring before more "
+                "time passes."
+            )
+        pending = [r for r in rows if r["status"] == "pending"]
+        if pending:
+            click.echo(
+                f"\n{len(pending)} proof(s) still PENDING — resting on the "
+                "calendar servers\nrather than Bitcoin. Run "
+                "`archive anchor-upgrade`."
+            )
+
+    @archive.command(name="anchor-upgrade")
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--ots", help="Path to the OpenTimestamps client")
+    def anchor_upgrade(root, ots):
+        """Convert pending calendar attestations into Bitcoin attestations"""
+        from .anchor import AnchorError, upgrade  # noqa: PLC0415
+
+        store = _open(root)
+        try:
+            results = upgrade(store, ots=ots)
+        except AnchorError as exc:
+            raise click.ClickException(str(exc))
+        if not results:
+            click.echo("No pending proofs.")
+            return
+        for manifest_ref, status, output in results:
+            click.echo(f"  {status:<9} {manifest_ref}")
+            if status == "pending":
+                click.echo(f"            {output.splitlines()[-1] if output else ''}")
+        click.echo("\nPending proofs are normal for the first few hours: the "
+                   "attestation\nappears once a Bitcoin block commits to it.")
+
+    @archive.command(name="anchor-verify")
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--ots", help="Path to the OpenTimestamps client")
+    @click.argument("manifest", required=False)
+    def anchor_verify(root, ots, manifest):
+        """Check a proof still holds, and that its manifest is unaltered"""
+        from .anchor import AnchorError, verify  # noqa: PLC0415
+
+        store = _open(root)
+        refs = ([manifest] if manifest
+                else sorted({row["manifest_ref"] for row in store.anchors()
+                             if row["proof_ref"]}))
+        if not refs:
+            click.echo("Nothing anchored yet.")
+            return
+        failed = 0
+        for ref in refs:
+            try:
+                result = verify(store, ref, ots=ots)
+            except AnchorError as exc:
+                raise click.ClickException(str(exc))
+            if result["ok"]:
+                click.echo(f"  ok      {ref}")
+            else:
+                failed += 1
+                click.echo(f"  FAILED  {ref}")
+                click.echo(f"          {result.get('reason') or result.get('output')}")
+        if failed:
+            sys.exit(1)
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")

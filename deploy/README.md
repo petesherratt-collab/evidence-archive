@@ -63,6 +63,36 @@ working directory and fails confusingly from anywhere else.
 Read `doc chg`, not `raw chg`. Three of the five targets churn at the raw level
 on every request (CSP nonces) while their tuned selector sits still.
 
+## Anchoring
+
+Anchoring runs daily from **2 Aug 2026**, on its own timers, against its own
+virtualenv so it can never disturb collection:
+
+```sh
+python3 -m venv .venv-anchor
+./.venv-anchor/bin/pip install opentimestamps-client
+cp repo/deploy/evidence-anchor*.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now evidence-anchor.timer evidence-anchor-upgrade.timer
+```
+
+`evidence-anchor.timer` stamps the chain heads daily; `evidence-anchor-upgrade`
+runs twice daily to convert calendar attestations into Bitcoin ones once a block
+has confirmed. Both are `Persistent=true`, because this laptop is not always on
+and a skipped day is the one loss anchoring cannot make good later.
+
+It was started before the schema had settled, deliberately. Proofs accumulate: an
+anchor over today's heads proves those heads existed today, permanently, whatever
+the format does afterwards, and a later anchor adds a proof rather than replacing
+one. Waiting would only have traded a permanent gain for tidiness.
+
+Check exposure with `./.venv/bin/kibitzr archive anchors` — the polls-not-yet-
+covered count is what has no external evidence of when it existed.
+
+Third-party verification: `deploy/VERIFYING.md`, with a standard-library
+implementation in `deploy/verify_independently.py` that shares no code with the
+plugin.
+
 ## Boot ordering
 
 The unit deliberately has no `After=network-online.target`. It carried one

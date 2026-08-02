@@ -25,7 +25,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 GENESIS = "0" * 64
 
 # Chain versions are deliberately NOT the schema version. The version is folded
@@ -132,6 +132,38 @@ CREATE TABLE IF NOT EXISTS annotation (
     record_hash     TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS annotation_kind_idx ON annotation (kind, id);
+
+-- External timestamp proofs over the chain heads.
+--
+-- The chains prove internal consistency and nothing whatever about time: a
+-- self-consistent history can be manufactured wholesale after the fact. Until a
+-- head has been committed to something outside this machine, the archive is a
+-- well-built database rather than evidence.
+--
+-- The constituent heads are stored alongside the combined value on purpose.
+-- `combined_head` is a formula that may change — it already went from v1 to v2
+-- when the annotation chain was added — and an anchor taken under an older
+-- formula must stay independently checkable without reimplementing that
+-- version. Proofs accumulate; a later schema change adds proofs rather than
+-- invalidating earlier ones, which is exactly why anchoring early is safe.
+CREATE TABLE IF NOT EXISTS anchor (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    check_name      TEXT    NOT NULL,
+    anchored_at     TEXT    NOT NULL,
+    head_version    INTEGER NOT NULL,
+    combined_head   TEXT    NOT NULL,
+    poll_head       TEXT    NOT NULL,
+    norm_head       TEXT    NOT NULL,
+    annotation_head TEXT    NOT NULL,
+    last_poll_id    INTEGER,
+    method          TEXT    NOT NULL,
+    manifest_ref    TEXT    NOT NULL,
+    manifest_sha256 TEXT    NOT NULL,
+    proof_ref       TEXT,
+    status          TEXT    NOT NULL,
+    detail          TEXT
+);
+CREATE INDEX IF NOT EXISTS anchor_check_idx ON anchor (check_name, id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -674,6 +706,97 @@ class ArchiveStore:
                     "period": period,
                 })
         return out
+
+    # -- anchors ---------------------------------------------------------
+
+    def head_components(self, check_name):
+        """Return the three chain heads and the value committing to them.
+
+        Returned as data rather than just the digest so that an anchor can
+        record what it committed to, not only the result of committing.
+        """
+        poll_head = self.head(check_name)
+        if poll_head is None:
+            return None
+        return {
+            "check": check_name,
+            "poll_head": poll_head,
+            "norm_head": self.normalisation_head(check_name) or GENESIS,
+            "annotation_head": self.annotation_head() or GENESIS,
+            "head_version": COMBINED_HEAD_VERSION,
+            "combined_head": self.combined_head(check_name),
+            "last_poll_id": self.last_poll_id(check_name),
+        }
+
+    def record_anchor(self, components, method, manifest_ref, manifest_sha256,
+                      proof_ref=None, status="pending", detail=None,
+                      anchored_at=None):
+        """Record that a set of heads was submitted for external timestamping."""
+        anchored_at = anchored_at or utc_now_iso()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO anchor (check_name, anchored_at, head_version,"
+                " combined_head, poll_head, norm_head, annotation_head,"
+                " last_poll_id, method, manifest_ref, manifest_sha256,"
+                " proof_ref, status, detail)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (components["check"], anchored_at, components["head_version"],
+                 components["combined_head"], components["poll_head"],
+                 components["norm_head"], components["annotation_head"],
+                 components["last_poll_id"], method, manifest_ref,
+                 manifest_sha256, proof_ref, status,
+                 json.dumps(detail, sort_keys=True, separators=(',', ':'),
+                            default=str) if detail is not None else None),
+            )
+            return cur.lastrowid
+
+    def anchors(self, check_name=None, status=None):
+        """Return anchor rows, oldest first."""
+        query = "SELECT * FROM anchor"
+        clauses, params = [], []
+        if check_name:
+            clauses.append("check_name = ?")
+            params.append(check_name)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY id"
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(query, params)]
+
+    def set_anchor_status(self, manifest_ref, status, detail=None):
+        """Update every anchor row sharing a manifest. Returns rows changed."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE anchor SET status = ?, detail = COALESCE(?, detail)"
+                " WHERE manifest_ref = ?",
+                (status,
+                 json.dumps(detail, sort_keys=True, separators=(',', ':'),
+                            default=str) if detail is not None else None,
+                 manifest_ref),
+            )
+            return cur.rowcount
+
+    def unanchored_polls(self, check_name):
+        """Count polls recorded since this check's most recent anchor.
+
+        The honest measure of exposure: these are the observations for which no
+        external proof of existence-by-a-given-time yet exists.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(last_poll_id) AS last FROM anchor"
+                " WHERE check_name = ? AND status != 'failed'",
+                (check_name,),
+            ).fetchone()
+            last = row["last"] if row and row["last"] is not None else 0
+            return conn.execute(
+                "SELECT COUNT(*) AS n FROM poll"
+                " WHERE check_name = ? AND id > ?",
+                (check_name, last),
+            ).fetchone()["n"]
 
     # -- integrity -------------------------------------------------------
 

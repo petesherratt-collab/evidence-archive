@@ -1,0 +1,18 @@
+[Unit]
+Description=Evidence archive — upgrade pending timestamp proofs to Bitcoin attestation
+Documentation=https://github.com/petesherratt-collab/evidence-archive
+# An OpenTimestamps proof arrives as a calendar attestation and only gains its
+# Bitcoin attestation once a block commits to it, hours later. Until upgraded, a
+# proof rests on the calendar operators staying honest and available — a weaker
+# claim than the one the archive wants to make, and one that quietly expires if
+# a calendar disappears. This is what closes that gap.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/peters/evidence-collection
+ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh a.pool.opentimestamps.org 120
+ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr archive anchor-upgrade
+Environment=KIBITZR_ARCHIVE_OTS=/home/peters/evidence-collection/.venv-anchor/bin/ots
+
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,16 @@
+[Unit]
+Description=Daily anchoring of evidence archive chain heads
+Documentation=https://github.com/petesherratt-collab/evidence-archive
+
+[Timer]
+OnCalendar=daily
+# This runs on a laptop that is not always on. Without Persistent, a machine
+# asleep at the scheduled time simply skips the day, and skipped days are the
+# one loss anchoring cannot make good afterwards.
+Persistent=true
+# Avoid every install hitting the calendars at the same instant.
+RandomizedDelaySec=30m
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

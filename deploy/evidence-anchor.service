@@ -1,0 +1,22 @@
+[Unit]
+Description=Evidence archive — commit chain heads to an external timestamp
+Documentation=https://github.com/petesherratt-collab/evidence-archive
+# Anchoring is the step that turns a self-consistent database into evidence.
+# Unlike a missed poll, unattested time cannot be recovered later: nothing can
+# retroactively prove that today's heads existed today. So this runs daily from
+# the start rather than waiting for the schema to settle — proofs accumulate,
+# and an anchor taken under an older format stays valid forever.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/peters/evidence-collection
+# The CLI resolves `archive/` relative to the working directory.
+ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh a.pool.opentimestamps.org 120
+ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr archive anchor
+Environment=KIBITZR_ARCHIVE_OTS=/home/peters/evidence-collection/.venv-anchor/bin/ots
+
+# Anchoring must never be able to disturb collection. It runs in its own
+# process against its own virtualenv, and a failure here leaves the archive
+# exactly as it was — a failed anchor is recorded as failed, not skipped.
+Nice=10
+IOSchedulingClass=idle
