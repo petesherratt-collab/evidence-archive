@@ -1,16 +1,20 @@
 """``kibitzr archive`` subcommands, registered via the kibitzr.cli entry point.
 
     kibitzr archive status          per-check polls, raw vs document changes
-    kibitzr archive verify          recompute both hash chains
+    kibitzr archive verify          recompute all three hash chains
     kibitzr archive head CHECK      chain head, for submitting to a timestamp
+    kibitzr archive annotations     assertions about the log, incl. corrections
+    kibitzr archive annotate        append a correction; never edits a row
+    kibitzr archive gaps            holes in a series, read against intent
 """
+import json
 import os
 import sqlite3
 import sys
 
 import click
 
-from .store import ArchiveStore
+from .store import ANNOTATION_KINDS, ArchiveStore
 
 
 DEFAULT_ROOT = "archive"
@@ -104,6 +108,21 @@ def extend_cli(group):
             for name in noisy:
                 click.echo(f"  - {name}")
 
+        # The counterpart of the transform warning below, for the other half of
+        # the pipeline. A change here does not alter a single collected byte,
+        # but it does change when a poll counts as failed — so a shift in the
+        # failure rate across it is the instrument moving, not the target.
+        refetched = [name for name in names
+                     if all_stats[name]["fetch_revisions"] > 1]
+        if refetched:
+            click.echo("\nFetch behaviour changed mid-series — failure counts "
+                       "before and after are not comparable:")
+            for name in refetched:
+                click.echo(f"  - {name} "
+                           f"({all_stats[name]['fetch_revisions']} regimes, "
+                           f"{all_stats[name]['failures']} failed polls) "
+                           f"— see `archive annotations --kind fetch_regime`")
+
         retuned = [name for name in names
                    if all_stats[name]["transform_revisions"] > 1]
         if retuned:
@@ -148,6 +167,19 @@ def extend_cli(group):
                                f"(first bad row id {bad_id})")
                     broken.append(f"{check} [{label}]")
 
+        # The annotation chain is global, so it is verified once rather than
+        # per check. A withdrawn correction has to be as detectable as a
+        # doctored poll, or appending corrections would be no safer than
+        # editing rows.
+        ok, bad_id = store.verify_annotation_chain()
+        checked += 1
+        if ok:
+            click.echo("  ok      (all checks)  [annotations]")
+        else:
+            click.echo(f"  BROKEN  (all checks)  [annotations]  "
+                       f"(first bad row id {bad_id})")
+            broken.append("annotations")
+
         if broken:
             click.echo(
                 f"\n{len(broken)} chain(s) failed verification. Either the log "
@@ -156,6 +188,99 @@ def extend_cli(group):
             )
             sys.exit(1)
         click.echo(f"\nAll {checked} chain(s) intact.")
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--kind", type=click.Choice(ANNOTATION_KINDS),
+                  help="Only annotations of this kind")
+    @click.argument("name", required=False)
+    def annotations(root, kind, name):
+        """Assertions about the log: corrections, regimes, declared schedules"""
+        store = _open(root)
+        rows = store.annotations(kind=kind, check_name=name)
+        if not rows:
+            click.echo("No annotations recorded.")
+            return
+        for row in rows:
+            scope = row["check_name"] or "(all checks)"
+            click.echo(f"#{row['id']}  {row['kind']}  {scope}")
+            click.echo(f"    effective from {row['effective_from']}"
+                       f"  (recorded {row['recorded_at']})")
+            if row["subject_from"] is not None:
+                click.echo(f"    concerns polls {row['subject_from']}"
+                           f"..{row['subject_to']}")
+            detail = json.dumps(row["detail"], indent=6, sort_keys=True)
+            click.echo(f"    {detail.strip()}")
+            click.echo()
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--kind", type=click.Choice(ANNOTATION_KINDS),
+                  default="correction", help="Annotation kind")
+    @click.option("--check", "check_name", help="Check the annotation is about")
+    @click.option("--from-poll", type=int, help="First poll id concerned")
+    @click.option("--to-poll", type=int, help="Last poll id concerned")
+    @click.option("--effective-from", help="When the asserted fact became true "
+                                           "(default: now)")
+    @click.option("--detail", "detail_json", required=True,
+                  help="JSON body of the assertion")
+    def annotate(root, kind, check_name, from_poll, to_poll, effective_from,
+                 detail_json):
+        """Append an assertion about the log — never edits an existing row
+
+        This is the sanctioned way to correct the archive. Poll rows are hashed
+        into a chain precisely so they cannot be revised, and spending that
+        property to tidy an embarrassing record would cost more than the record
+        does. Corrections are appended and read alongside what they describe.
+        """
+        store = _open(root)
+        try:
+            detail = json.loads(detail_json)
+        except ValueError as exc:
+            raise click.ClickException(f"--detail is not valid JSON: {exc}")
+        digest = store.record_annotation(
+            kind, detail, check_name=check_name, subject_from=from_poll,
+            subject_to=to_poll, effective_from=effective_from,
+        )
+        click.echo(f"Recorded {kind} annotation: {digest}")
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--tolerance", default=2.0, show_default=True,
+                  help="Multiple of the declared period before a gap is one")
+    @click.argument("name", nargs=-1)
+    def gaps(root, tolerance, name):
+        """Holes in a series, judged against the declared schedule
+
+        Every poll writes a row, so silence already means nobody looked. What
+        this adds is whether we *intended* to be looking: a hole is only a gap
+        in coverage if a schedule was in force across it.
+        """
+        store = _open(root)
+        names = list(name) or _check_names(store)
+        found = 0
+        unjudgeable = []
+        for check in names:
+            if not store.annotations("schedule", check_name=check):
+                unjudgeable.append(check)
+                continue
+            for gap in store.gaps(check, tolerance=tolerance):
+                found += 1
+                hours = gap["seconds"] / 3600
+                click.echo(
+                    f"{check}\n"
+                    f"    {gap['from']} -> {gap['to']}"
+                    f"  ({hours:.1f}h, declared every "
+                    f"{gap['period'] / 3600:.1f}h)\n"
+                    f"    polls {gap['from_poll']} -> {gap['to_poll']}"
+                )
+        if unjudgeable:
+            click.echo("\nNo schedule declared, so silence in these cannot be "
+                       "read as a gap either way:")
+            for check in unjudgeable:
+                click.echo(f"  - {check}")
+        if not found:
+            click.echo("\nNo gaps beyond tolerance in the judgeable checks.")
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")

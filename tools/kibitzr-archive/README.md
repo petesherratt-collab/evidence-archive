@@ -120,11 +120,12 @@ banners — while the content you actually selected sits perfectly still.
 Measured on a UK procurement watchlist, three of four live targets churned at
 the raw level and none of them had moved.
 
-So there are two chains, answering two questions:
+So there are three chains, answering three questions:
 
 ```
 poll chain          did the bytes we fetched change?
 normalisation chain did the content we selected change?
+annotation chain    what do we now know about the log that it does not say?
 ```
 
 `kibitzr archive status` reports both as `raw chg` and `doc chg`, and judges
@@ -148,14 +149,15 @@ point on:
 ```python
 store.verify_chain("Example")                # poll chain
 store.verify_normalisation_chain("Example")  # normalisation chain
+store.verify_annotation_chain()              # annotation chain (global)
 store.combined_head("Example")               # the value to anchor
 ```
 
-`combined_head()` is the anchoring seam. There are two chains, and anchoring
-one would leave the other free to be rewritten, so it commits to both:
+`combined_head()` is the anchoring seam. Anchoring one chain would leave the
+others free to be rewritten, so it commits to all three:
 
 ```
-sha256('{"norm":"<norm_head>","poll":"<poll_head>","v":1}')
+sha256('{"ann":"<ann_head>","norm":"<norm_head>","poll":"<poll_head>","v":2}')
 ```
 
 with an unanchored chain represented by the all-zero genesis value. Submitting
@@ -165,6 +167,74 @@ one anchor per check per batch, rather than one per observation.
 The chains also cross-check each other. Rewriting a normalised hash to conceal
 an amendment breaks the normalisation chain while the poll chain still
 verifies, and the retained raw response still contains the original text.
+
+## Correcting the record
+
+A poll row can be wrong about the world. The collector's own failures are
+recorded in the same log as its observations, and a bug in failure handling
+puts a false statement on the chain — one that is now, by construction,
+unrewritable.
+
+That is the design working, not a problem with it. The correction goes on the
+annotation chain and is read alongside the rows it describes:
+
+```
+kibitzr archive annotate --kind correction --check "Example" \
+    --from-poll 11 --to-poll 40 \
+    --effective-from 2026-08-02T06:51:00+00:00 \
+    --detail '{"true_cause": "..."}'
+kibitzr archive annotations --kind correction
+```
+
+The rows named keep their original text and still verify. Annotations are
+themselves chained and covered by the anchor, so a correction cannot be
+withdrawn any more quietly than a poll can be doctored.
+
+`effective_from` (when the fact became true) is stored separately from
+`recorded_at` (when we wrote it down), so a retrospective annotation cannot
+imply we knew earlier than we did.
+
+Three kinds are written automatically or by hand:
+
+| kind | says |
+|---|---|
+| `correction` | rows N..M record X; the truth was Y |
+| `fetch_regime` | from time T the fetcher behaves like this |
+| `schedule` | check C was *intended* to poll every P seconds from time T |
+
+## Knowing when the instrument changed
+
+`transform_id` makes a selector retune detectable. `fetch_id` does the same for
+the other half of the pipeline, and is recorded on every poll row.
+
+It exists because fixing the fetcher changes *when a poll counts as failed*
+without changing a single collected byte. Failure counts either side of such a
+change are not comparable, and without a fingerprint a reader would have to
+correlate against a git history they may not hold to discover that. `status`
+warns when a check's series spans more than one regime.
+
+Rows written before the fingerprint existed carry no `fetch_id`, and are
+excluded from the record hash when absent — so archives predating it still
+verify. They still count as a regime of their own, named by a retrospective
+`fetch_regime` annotation rather than by a value on the row.
+
+## Reading a gap
+
+Every poll writes a row, so silence in the log already means nobody looked —
+that invariant is the reason the poll log exists at all.
+
+What silence *cannot* say on its own is whether anyone meant to be looking. A
+hole is ambiguous between "not scheduled yet" and "scheduled, and the machine
+was off", and only the second is a gap in coverage. So the intended period is
+recorded as data:
+
+```
+kibitzr archive gaps
+```
+
+Each interval is judged against the schedule in force when it opened, not the
+current one. Checks with no schedule declared are listed separately as
+unjudgeable rather than reported as fine.
 
 This matters because **git history is not evidence**. Kibitzr initialises
 each page repo with a hardcoded `user.email` and `user.name`, commits are
@@ -185,6 +255,20 @@ at.
   a history. It tells you the rules changed, not what they were or when they
   were valid. Open Terms Archive solves that properly, with dated declaration
   and filter histories and an explicit `isTechnicalUpgrade` marker.
+- **Fetch regimes are fingerprinted, not versioned either.** `fetch_id` has
+  exactly the same limit as `transform_id`: it says the fetcher changed, not
+  what it was before. The `fetch_regime` annotation is where the prose goes,
+  and it is written by hand.
+- **A declared schedule is intent, not a guarantee.** It records what the
+  collector was *told* to do. It cannot show that the process was up, so a
+  series with no gaps and no uptime evidence still rests on trusting the
+  keeper. Rules pinned to a wall-clock time do not reduce to a period and are
+  reported as unjudgeable rather than guessed at.
+- **The retry-loop fix is a local override.** `sleep_on_exception` is
+  reimplemented in the promoter because upstream's uses `collections.Callable`,
+  removed in Python 3.10. Patching the installed kibitzr instead would be lost
+  on the next reinstall, taking the archive's failure attribution with it. If
+  upstream fixes it, this override becomes redundant but stays harmless.
 - **Archiving never fails a check.** A storage error is logged and
   swallowed; monitoring keeps running, and the transform wrapper re-raises
   nothing. Watch the logs rather than assuming silence means success.

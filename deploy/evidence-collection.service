@@ -1,15 +1,22 @@
 [Unit]
 Description=Evidence archive — UK government contract awards collection
 Documentation=https://github.com/petesherratt-collab/evidence-archive
-# Do not start before the network is reachable; a burst of DNS failures at boot
-# would otherwise be recorded as failed polls that say more about this laptop
-# than about the targets.
-After=network-online.target
-Wants=network-online.target
+# NOTE: this unit deliberately does NOT carry `After=network-online.target`.
+# It used to, with a comment claiming it prevented boot-time DNS failures being
+# recorded as failed polls. That was never true: network-online.target exists in
+# the *system* systemd manager, not in the per-user manager this service runs
+# under, where it resolves to not-found and the ordering is silently ignored.
+# On 2 Aug 2026 the service started ahead of the network and wrote 25 failed
+# polls into the archive, each blaming the wrong cause.
+#
+# A user unit cannot order against a system target, so the wait is explicit
+# below. It is bounded: an unreachable target should be recorded as unreachable,
+# not silently not polled.
 
 [Service]
 Type=simple
 WorkingDirectory=/home/peters/evidence-collection
+ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh
 ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr run
 # kibitzr keeps its own schedule from each check's `period`, so this is a
 # long-lived process rather than a timer. A timer firing `once` would ignore

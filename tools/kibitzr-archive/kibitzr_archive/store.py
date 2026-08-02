@@ -25,7 +25,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 GENESIS = "0" * 64
 
 # Chain versions are deliberately NOT the schema version. The version is folded
@@ -36,6 +36,33 @@ GENESIS = "0" * 64
 # you ever do.
 POLL_CHAIN_VERSION = 1
 NORMALISATION_CHAIN_VERSION = 1
+ANNOTATION_CHAIN_VERSION = 1
+
+# What the anchor commits to. Bumping this changes every future anchor value,
+# so it may only move while nothing has been anchored yet, or with a documented
+# migration. Moved 1 -> 2 when the annotation chain was added: leaving
+# annotations outside the anchor would have let a correction be retracted
+# silently, which is the one thing a correction must not be.
+COMBINED_HEAD_VERSION = 2
+
+# Fingerprint of how the fetcher behaves, recorded against every poll from the
+# point it was introduced. This is NOT a chain version and does not affect how
+# rows hash; it is data about the regime that produced the row.
+#
+#   1  kibitzr's stock retry loop, which is dead on Python 3.10+ —
+#      sleep_on_exception raises AttributeError on collections.Callable while
+#      handling a retriable error, so the first transient failure is fatal to
+#      the poll and is recorded with the wrong cause.
+#   2  retry loop restored (see promoter.CapturingSessionFetcher), so a
+#      transient failure is retried before it is recorded as a failure.
+#
+# Bump this whenever a change alters WHEN a poll succeeds or fails. A reader
+# comparing failure rates across a bump is comparing two different instruments.
+FETCH_SEMANTICS_VERSION = 2
+
+# Annotation kinds. Annotations are assertions ABOUT the poll log, appended to
+# their own chain; they never modify a poll row.
+ANNOTATION_KINDS = ("correction", "fetch_regime", "schedule", "note")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS poll (
@@ -73,8 +100,46 @@ CREATE TABLE IF NOT EXISTS normalisation (
     record_hash     TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS norm_check_idx ON normalisation (check_name, id);
+
+-- Assertions about the poll log, on their own chain.
+--
+-- The poll log is append-only and its rows are hashed, so a row that turns out
+-- to be misleading cannot be corrected by editing it — that is the property the
+-- chain exists to provide, and spending it to tidy up a bad record would be a
+-- worse loss than the bad record. Corrections are therefore appended here and
+-- read alongside the rows they describe.
+--
+-- Three things live here, and they are the same shape: something true about the
+-- collector rather than about the target.
+--
+--   correction    rows N..M say X; the truth was Y
+--   fetch_regime  from time T the fetcher behaves like this
+--   schedule      check C was INTENDED to poll every P seconds from time T
+--
+-- `effective_from` is when the asserted fact became true; `recorded_at` is when
+-- we wrote it down. They are usually different, and conflating them would let
+-- the archive claim it knew something earlier than it did.
+CREATE TABLE IF NOT EXISTS annotation (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind            TEXT    NOT NULL,
+    check_name      TEXT,
+    effective_from  TEXT    NOT NULL,
+    recorded_at     TEXT    NOT NULL,
+    subject_from    INTEGER,
+    subject_to      INTEGER,
+    detail          TEXT    NOT NULL,
+    prev_hash       TEXT    NOT NULL,
+    record_hash     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS annotation_kind_idx ON annotation (kind, id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
+
+# Columns added to `poll` after the first release. SQLite has no
+# ADD COLUMN IF NOT EXISTS, so these are applied by inspection.
+_POLL_ADDED_COLUMNS = (
+    ("fetch_id", "TEXT"),
+)
 
 
 def sha256_hex(data):
@@ -95,6 +160,64 @@ def compute_record_hash(fields, prev_hash, version=POLL_CHAIN_VERSION):
     """
     payload = dict(fields, v=version, prev=prev_hash)
     encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    return sha256_hex(encoded.encode('utf-8'))
+
+
+def poll_hash_fields(check_name, url, polled_at, ok, http_status,
+                     content_sha256, changed, fetch_id_=None):
+    """Return the identifying fields of a poll row, in hashed form.
+
+    Written once and used by both the writer and the verifier, because the two
+    computing the same payload is the entire basis of the chain and two copies
+    of the field list would eventually disagree.
+
+    ``fetch_id`` is included **only when present**. Rows written before fetch
+    behaviour was fingerprinted have no such value and hash exactly as they did
+    when they were written, so an existing archive still verifies after the
+    upgrade. Absence is unforgeable in the direction that matters: a row's hash
+    commits to whether it carried a fetch_id, so one cannot be stripped from a
+    row after the fact.
+    """
+    fields = {
+        "check": check_name,
+        "url": url,
+        "polled_at": polled_at,
+        "ok": bool(ok),
+        "http_status": http_status,
+        "content_sha256": content_sha256,
+        "changed": bool(changed),
+    }
+    if fetch_id_ is not None:
+        fields["fetch_id"] = fetch_id_
+    return fields
+
+
+def fetch_id(conf=None, semantics=FETCH_SEMANTICS_VERSION):
+    """Fingerprint the regime a poll was fetched under.
+
+    The counterpart of ``transform_id``, for the other half of the pipeline.
+    ``transform_id`` exists so that retuning a selector is distinguishable from
+    the document changing; this exists so that changing the fetcher is
+    distinguishable from the target's availability changing.
+
+    That matters most for the failure series. Fixing a broken retry loop does
+    not touch a single byte of collected content, but it does change when a poll
+    is recorded as failed — so failure counts before and after are not
+    comparable, and without this a reader would have to correlate against a git
+    history they may not hold in order to find that out.
+
+    Covers what can move the success/failure boundary: the fetch semantics
+    version, whether a browser was driven, and the identity presented to the
+    server (a blocked User-Agent shows up as the target refusing us).
+    """
+    conf = conf or {}
+    payload = {
+        "v": semantics,
+        "firefox": bool(conf.get("firefox") or conf.get("browser")),
+        "user_agent": conf.get("user_agent", None),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                         default=str)
     return sha256_hex(encoded.encode('utf-8'))
 
 
@@ -178,9 +301,19 @@ class ArchiveStore:
         and keeps every existing row. Poll chains recorded before the upgrade
         still verify, because the chain version they were hashed with has not
         moved. See the note on POLL_CHAIN_VERSION.
+
+        Columns added to `poll` after the fact are applied here too. They are
+        nullable and excluded from the hash when null, so rows written before
+        the column existed continue to verify unchanged.
         """
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            existing = {row["name"]
+                        for row in conn.execute("PRAGMA table_info(poll)")}
+            for column, sql_type in _POLL_ADDED_COLUMNS:
+                if column not in existing:
+                    conn.execute(
+                        f"ALTER TABLE poll ADD COLUMN {column} {sql_type}")
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -247,12 +380,15 @@ class ArchiveStore:
 
     def record_poll(self, check_name, url=None, ok=True, content=None,
                     http_status=None, etag=None, last_modified=None,
-                    error=None, polled_at=None):
+                    error=None, polled_at=None, fetch_id_=None):
         """Append one poll to the log, retaining content if it is new.
 
         ``content`` is the response as fetched, before any transform. Pass
         None for a failed fetch; the poll is still logged, with ``changed``
         false, so the gap is visible as an attempted observation.
+
+        ``fetch_id_`` fingerprints the fetch regime this poll was made under;
+        see ``fetch_id``. Omitting it is allowed and hashes as it always did.
         """
         polled_at = polled_at or utc_now_iso()
         raw = None
@@ -278,26 +414,19 @@ class ArchiveStore:
             ).fetchone()
             prev_hash = last["record_hash"] if last else GENESIS
 
-            fields = {
-                "check": check_name,
-                "url": url,
-                "polled_at": polled_at,
-                "ok": bool(ok),
-                "http_status": http_status,
-                "content_sha256": digest,
-                "changed": changed,
-            }
+            fields = poll_hash_fields(check_name, url, polled_at, ok,
+                                      http_status, digest, changed, fetch_id_)
             record_hash = compute_record_hash(fields, prev_hash)
 
             cur = conn.execute(
                 "INSERT INTO poll (check_name, url, polled_at, ok, http_status,"
                 " content_length, content_sha256, etag, last_modified, changed,"
-                " raw_ref, error, prev_hash, record_hash)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " raw_ref, error, fetch_id, prev_hash, record_hash)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (check_name, url, polled_at, int(bool(ok)), http_status,
                  len(raw) if raw is not None else None, digest, etag,
-                 last_modified, int(changed), raw_ref, error, prev_hash,
-                 record_hash),
+                 last_modified, int(changed), raw_ref, error, fetch_id_,
+                 prev_hash, record_hash),
             )
             poll_id = cur.lastrowid
 
@@ -377,6 +506,175 @@ class ArchiveStore:
         return NormalisationRecord(changed, digest, record_hash, recorded_at,
                                    fingerprint, poll_id)
 
+    # -- annotations -----------------------------------------------------
+
+    def record_annotation(self, kind, detail, check_name=None,
+                          effective_from=None, subject_from=None,
+                          subject_to=None, recorded_at=None):
+        """Append an assertion about the log to the annotation chain.
+
+        This is the only sanctioned way to correct the record. A poll row that
+        turns out to be misleading stays exactly as written and gains an
+        annotation pointing at it; the alternative — editing the row — would
+        break the chain, and an archive that edits itself when the contents
+        embarrass it has no claim on anyone's trust. Being able to say "we found
+        bad records and appended a correction" is worth more than never having
+        had one.
+
+        ``detail`` is any JSON-serialisable object and is canonicalised before
+        hashing, so a third party holding the row can recompute the hash.
+        """
+        if kind not in ANNOTATION_KINDS:
+            raise ValueError(
+                f"unknown annotation kind {kind!r}; "
+                f"expected one of {', '.join(ANNOTATION_KINDS)}")
+        recorded_at = recorded_at or utc_now_iso()
+        effective_from = effective_from or recorded_at
+        encoded_detail = json.dumps(detail, sort_keys=True,
+                                    separators=(',', ':'), default=str)
+
+        with self._connect() as conn:
+            last = conn.execute(
+                "SELECT record_hash FROM annotation ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            prev_hash = last["record_hash"] if last else GENESIS
+
+            fields = {
+                "kind": kind,
+                "check": check_name,
+                "effective_from": effective_from,
+                "recorded_at": recorded_at,
+                "subject_from": subject_from,
+                "subject_to": subject_to,
+                "detail": encoded_detail,
+            }
+            record_hash = compute_record_hash(
+                fields, prev_hash, version=ANNOTATION_CHAIN_VERSION)
+
+            conn.execute(
+                "INSERT INTO annotation (kind, check_name, effective_from,"
+                " recorded_at, subject_from, subject_to, detail, prev_hash,"
+                " record_hash) VALUES (?,?,?,?,?,?,?,?,?)",
+                (kind, check_name, effective_from, recorded_at, subject_from,
+                 subject_to, encoded_detail, prev_hash, record_hash),
+            )
+        return record_hash
+
+    def annotations(self, kind=None, check_name=None):
+        """Return annotation rows, oldest first, with ``detail`` decoded."""
+        query = "SELECT * FROM annotation"
+        clauses, params = [], []
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if check_name:
+            # A NULL check_name is an annotation about every check, so it is
+            # part of the answer for any particular one.
+            clauses.append("(check_name = ? OR check_name IS NULL)")
+            params.append(check_name)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY id"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["detail"] = json.loads(row["detail"])
+            out.append(item)
+        return out
+
+    def last_annotation(self, kind, check_name=None):
+        """Return the most recent annotation of a kind for a check, or None."""
+        matching = [a for a in self.annotations(kind=kind)
+                    if a["check_name"] == check_name]
+        return matching[-1] if matching else None
+
+    def declare_schedule(self, check_name, period, effective_from=None):
+        """Record the period a check is INTENDED to poll at, if it has changed.
+
+        Every poll writes a row, so absence of rows already means absence of
+        polling — the log can tell "checked, unchanged" from "not checked".
+        What it cannot tell unaided is whether we *meant* to be watching, so a
+        hole reads ambiguously between "not scheduled yet" and "scheduled, and
+        the machine was off". Only the second is a gap in coverage.
+
+        Recording intent as data resolves that: a gap can then be read against
+        the schedule in force at the time rather than guessed at.
+
+        Returns the annotation hash if one was written, else None.
+        """
+        previous = self.last_annotation("schedule", check_name)
+        if previous and previous["detail"].get("period") == period:
+            return None
+        return self.record_annotation(
+            "schedule",
+            {"period": period},
+            check_name=check_name,
+            effective_from=effective_from,
+        )
+
+    def declare_fetch_regime(self, fingerprint, semantics, note,
+                             check_name=None, effective_from=None):
+        """Record a change in fetch behaviour, if it has changed.
+
+        The fingerprint on each poll row makes the discontinuity *detectable*;
+        this makes it *legible*. A reader who sees the fetch_id move should not
+        have to reverse-engineer what moved.
+
+        Returns the annotation hash if one was written, else None.
+        """
+        previous = self.last_annotation("fetch_regime", check_name)
+        if previous and previous["detail"].get("fetch_id") == fingerprint:
+            return None
+        return self.record_annotation(
+            "fetch_regime",
+            {"fetch_id": fingerprint, "semantics": semantics, "note": note},
+            check_name=check_name,
+            effective_from=effective_from,
+        )
+
+    def gaps(self, check_name, tolerance=2.0):
+        """Return intervals between polls that exceed the declared schedule.
+
+        Each gap is reported against the period that was in force when it
+        started, so a gap opened under a 6-hourly schedule is not judged by a
+        12-hourly one declared later. Intervals with no schedule in force are
+        returned with ``period: None`` — unjudgeable rather than silently fine,
+        because "we never said we were watching" is a real answer and must not
+        be confused with "we were watching and nothing happened".
+        """
+        schedules = [a for a in self.annotations("schedule")
+                     if a["check_name"] in (check_name, None)]
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, polled_at FROM poll WHERE check_name = ?"
+                " ORDER BY polled_at, id",
+                (check_name,),
+            ).fetchall()
+
+        def period_at(when):
+            active = [s for s in schedules if s["effective_from"] <= when]
+            return active[-1]["detail"].get("period") if active else None
+
+        out = []
+        for earlier, later in zip(rows, rows[1:]):
+            start = datetime.fromisoformat(earlier["polled_at"])
+            end = datetime.fromisoformat(later["polled_at"])
+            seconds = (end - start).total_seconds()
+            period = period_at(earlier["polled_at"])
+            if period and seconds > period * tolerance:
+                out.append({
+                    "check_name": check_name,
+                    "from_poll": earlier["id"],
+                    "to_poll": later["id"],
+                    "from": earlier["polled_at"],
+                    "to": later["polled_at"],
+                    "seconds": seconds,
+                    "period": period,
+                })
+        return out
+
     # -- integrity -------------------------------------------------------
 
     def head(self, check_name):
@@ -394,18 +692,34 @@ class ArchiveStore:
             ).fetchone()
         return row["record_hash"] if row else None
 
-    def combined_head(self, check_name):
-        """Return one value committing to both chains, or None if no polls.
+    def annotation_head(self):
+        """Return the current annotation-chain head, or None.
 
-        This is the value to submit for external timestamping. There are two
-        chains now, and anchoring only one of them would leave the other free to
-        be rewritten, so the anchor has to cover both.
+        One global chain rather than one per check: annotations are few, and
+        some of them (a fetch-regime change) are true of every check at once.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT record_hash FROM annotation ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return row["record_hash"] if row else None
+
+    def combined_head(self, check_name):
+        """Return one value committing to all three chains, or None if no polls.
+
+        This is the value to submit for external timestamping. Anchoring one
+        chain would leave the others free to be rewritten, so the anchor covers
+        all of them — including annotations, so that a correction, once
+        anchored, cannot quietly be withdrawn.
 
         Reproducible by a third party as::
 
-            sha256('{"norm":"<norm_head>","poll":"<poll_head>","v":1}')
+            sha256('{"ann":"<ann_head>","norm":"<norm_head>",'
+                   '"poll":"<poll_head>","v":2}')
 
         with an unanchored chain represented by the all-zero genesis value.
+        The annotation head is global, so it is the same for every check in a
+        batch; the poll and normalisation heads are per check.
         """
         poll_head = self.head(check_name)
         if poll_head is None:
@@ -413,7 +727,8 @@ class ArchiveStore:
         payload = {
             "poll": poll_head,
             "norm": self.normalisation_head(check_name) or GENESIS,
-            "v": 1,
+            "ann": self.annotation_head() or GENESIS,
+            "v": COMBINED_HEAD_VERSION,
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'))
         return sha256_hex(encoded.encode('utf-8'))
@@ -435,15 +750,11 @@ class ArchiveStore:
         for row in rows:
             if row["prev_hash"] != prev_hash:
                 return False, row["id"]
-            fields = {
-                "check": row["check_name"],
-                "url": row["url"],
-                "polled_at": row["polled_at"],
-                "ok": bool(row["ok"]),
-                "http_status": row["http_status"],
-                "content_sha256": row["content_sha256"],
-                "changed": bool(row["changed"]),
-            }
+            fields = poll_hash_fields(
+                row["check_name"], row["url"], row["polled_at"], row["ok"],
+                row["http_status"], row["content_sha256"], row["changed"],
+                row["fetch_id"],
+            )
             if compute_record_hash(fields, prev_hash) != row["record_hash"]:
                 return False, row["id"]
             prev_hash = row["record_hash"]
@@ -479,6 +790,36 @@ class ArchiveStore:
             prev_hash = row["record_hash"]
         return True, None
 
+    def verify_annotation_chain(self):
+        """Recompute the annotation hash chain.
+
+        Same contract as ``verify_chain``: (True, None) or (False, bad_row_id).
+        A retracted correction is exactly as detectable as a doctored poll.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM annotation ORDER BY id").fetchall()
+
+        prev_hash = GENESIS
+        for row in rows:
+            if row["prev_hash"] != prev_hash:
+                return False, row["id"]
+            fields = {
+                "kind": row["kind"],
+                "check": row["check_name"],
+                "effective_from": row["effective_from"],
+                "recorded_at": row["recorded_at"],
+                "subject_from": row["subject_from"],
+                "subject_to": row["subject_to"],
+                "detail": row["detail"],
+            }
+            expected = compute_record_hash(
+                fields, prev_hash, version=ANNOTATION_CHAIN_VERSION)
+            if expected != row["record_hash"]:
+                return False, row["id"]
+            prev_hash = row["record_hash"]
+        return True, None
+
     def stats(self, check_name=None):
         """Return (polls, changes, blobs, bytes_on_disk) for reporting.
 
@@ -486,7 +827,12 @@ class ArchiveStore:
         quality: a target producing far more changes than its documents
         plausibly have is a target with broken selectors.
         """
-        query = "SELECT COUNT(*) AS polls, SUM(changed) AS changes FROM poll"
+        query = ("SELECT COUNT(*) AS polls, SUM(changed) AS changes,"
+                 " COUNT(DISTINCT fetch_id) AS fetches,"
+                 " SUM(CASE WHEN fetch_id IS NULL THEN 1 ELSE 0 END)"
+                 "   AS unfingerprinted,"
+                 " SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failures"
+                 " FROM poll")
         norm_query = ("SELECT COUNT(*) AS n, SUM(changed) AS changes,"
                       " COUNT(DISTINCT transform_id) AS transforms"
                       " FROM normalisation")
@@ -507,6 +853,19 @@ class ArchiveStore:
         return {
             "polls": row["polls"] or 0,
             "changes": row["changes"] or 0,
+            "failures": row["failures"] or 0,
+            "unfingerprinted": row["unfingerprinted"] or 0,
+            # More than one fetch regime means the fetcher itself changed
+            # mid-series, so a shift in the FAILURE rate across that point may
+            # be ours rather than the target's.
+            #
+            # Rows predating the fingerprint count as one regime between them.
+            # SQL's COUNT(DISTINCT) ignores NULLs, and taking that at face value
+            # would have hidden the most consequential regime change this
+            # archive has had — the one that introduced the fingerprint — behind
+            # a count of 1. An era we cannot name is still an era.
+            "fetch_revisions": ((row["fetches"] or 0)
+                                + (1 if row["unfingerprinted"] else 0)),
             # Normalised counts are the ones to judge a selector by. `changes`
             # above moves with the raw bytes and will be inflated by per-request
             # nonces and viewstate on many real sites.

@@ -114,6 +114,82 @@ def install(checker, store):
     return True
 
 
+#: Seconds per schedule unit, for reducing kibitzr's rules to one number.
+_UNIT_SECONDS = {
+    "seconds": 1, "second": 1,
+    "minutes": 60, "minute": 60,
+    "hours": 3600, "hour": 3600,
+    "days": 86400, "day": 86400,
+    "weeks": 604800, "week": 604800,
+}
+
+
+def declared_period(conf):
+    """Return the intended polling period in seconds, or None if not derivable.
+
+    kibitzr's config loader consumes ``period`` and replaces it with a list of
+    ``TimelineRule(interval, unit, at)``, so by the time this hook runs the YAML
+    key is gone and the rules are what the scheduler will actually honour —
+    which is the thing worth recording as intent.
+
+    Rules pinned to a wall-clock time (``at``) do not reduce to a period and are
+    reported as None rather than guessed at. Recording a wrong intent would be
+    worse than recording none: gaps would then be judged against a schedule
+    nobody ever declared.
+    """
+    rules = conf.get("schedule") or []
+    periods = []
+    for rule in rules:
+        interval = getattr(rule, "interval", None)
+        unit = getattr(rule, "unit", None)
+        at = getattr(rule, "at", None)
+        if at is not None or interval is None:
+            return None
+        seconds = _UNIT_SECONDS.get(unit)
+        if seconds is None:
+            return None
+        periods.append(interval * seconds)
+    if not periods:
+        return None
+    # Several rules means several chances to poll, so the shortest is the
+    # interval a gap should be judged against.
+    return min(periods)
+
+
+def declare_intent(checker, store):
+    """Record the schedule and fetch regime this check is running under.
+
+    Both are append-on-change: a restart that alters nothing writes nothing, so
+    the annotation chain stays a log of actual regime changes rather than a
+    log of restarts.
+    """
+    from .promoter import check_fetch_id  # noqa: PLC0415
+    from .store import FETCH_SEMANTICS_VERSION  # noqa: PLC0415
+
+    conf = checker.conf
+    name = conf["name"]
+
+    period = declared_period(conf)
+    if period is None:
+        logger.warning(
+            "Check %r has no reducible polling period; gaps in its series "
+            "cannot be read against declared intent.", name)
+    elif store.declare_schedule(name, period):
+        logger.info("Declared schedule for %r: every %ss", name, period)
+
+    fingerprint = check_fetch_id(conf)
+    if store.declare_fetch_regime(
+        fingerprint,
+        FETCH_SEMANTICS_VERSION,
+        "retry loop restored over upstream's removed collections.Callable; "
+        "transient fetch errors are now retried before being recorded as "
+        "failures, so failure counts are not comparable across this point",
+        check_name=name,
+    ):
+        logger.info("Recorded fetch-regime change for %r (%s)",
+                    name, fingerprint[:12])
+
+
 def before_start(app, checkers):  # noqa: ARG001 - signature fixed by kibitzr
     """Install normalisation capture on every check with ``archive`` set."""
     # Imported here so that merely loading the entry point does not pull in the
@@ -127,5 +203,12 @@ def before_start(app, checkers):  # noqa: ARG001 - signature fixed by kibitzr
         store = get_store(archive_root(checker.conf))
         if install(checker, store):
             installed += 1
+        try:
+            declare_intent(checker, store)
+        except Exception:  # noqa: BLE001
+            # Same rule as everywhere else here: recording context about a
+            # check must never be able to stop the check from running.
+            logger.exception("Failed to declare intent for %r",
+                             checker.conf.get("name"))
     if installed:
         logger.info("Recording normalised hashes for %d check(s)", installed)
