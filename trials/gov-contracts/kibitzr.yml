@@ -325,3 +325,65 @@ checks:
     transform:
       - jq: '[.releases[] | select(.tender.procurementMethod == "direct") | {ocid, date, buyer: .buyer.name, values: [.awards[]?.value], suppliers: [.awards[]?.suppliers[]?.name], method: .tender.procurementMethod}] | sort_by(.ocid)'
       - changes: verbose
+
+  # ---------------------------------------------------------------------
+  # 11: control — the collector watching itself
+  #
+  # ADDED 3 Aug 2026. Everything above is a target whose silence is the
+  # finding. This one is the opposite: a page that is KNOWN to change, so that
+  # the silence above can be read at all.
+  #
+  # The problem it fixes. A fortnight of unchanged polls across targets 1-10
+  # has two readings — nothing moved, or the collector was quietly broken and
+  # wrote "unchanged" fourteen days running. The poll log cannot separate them,
+  # because both produce identical rows. And the broken case is not exotic: a
+  # stale cache, a wrong DNS answer or a captive portal returning HTTP 200 all
+  # yield well-formed false unchanged polls. Recording unchanged polls is this
+  # archive's central claim, so leaving that ambiguity unresolved undercuts the
+  # thing it exists to do.
+  #
+  # petesherratt-collab/evidence-control rebuilds this page every 15 minutes
+  # from a GitHub Action. The mechanism shares nothing with this laptop, which
+  # is the property that matters: a control driven from here would stop when
+  # the collector stopped and would fail to detect precisely the outage it is
+  # for.
+  #
+  # WHAT A TICK OBSERVED HERE SHOWS: at that moment the collector resolved a
+  # host, fetched from the open internet rather than a cache, decoded, hashed
+  # and recorded. That is a liveness claim about the instrument.
+  #
+  # WHAT IT DOES NOT SHOW: anything about the OTHER targets' selectors. Each of
+  # those is tuned to a page this one does not resemble, so a selector that has
+  # silently stopped matching after a redesign produces empty normalised content
+  # while this ticks along happily. Transform fingerprints cover that, not this.
+  # Nor does it show the targets were reachable — a target-specific block or 403
+  # shows up as failed polls on that target.
+  #
+  # EXPECT `status` TO FLAG THIS CHECK as changing on more than half its polls.
+  # It changes on ALL of them, by construction. That warning is tuned for
+  # selectors that have come loose; here 100% is the check working, and a poll
+  # that did NOT change is the thing to investigate. Do not "fix" it.
+  #
+  # Period is 1h against a 15m tick. The 4x margin absorbs GitHub's scheduler
+  # running late or skipping runs — read one stale poll as jitter and a run of
+  # them as a fault. 1h rather than 6h because this is the instrument: finer
+  # resolution bounds an outage more tightly, and the page is ~2 KB.
+  #
+  # robots.txt on the host allows all agents, stated deliberately in that repo —
+  # a control its own collector would have to ignore a disallow to reach would
+  # undercut the point. See target 1's note on Public Contracts Scotland.
+  # ---------------------------------------------------------------------
+
+  - name: Control — collector liveness
+    url: https://petesherratt-collab.github.io/evidence-control/
+    period: 1h
+    archive: true
+    transform:
+      # Everything that varies lives inside #tick and the rest of the page is
+      # byte-stable between builds, so this selector is the whole payload and
+      # there is no incidental churn to suppress. The markup is under our own
+      # control, which is the one case in this file where a selector cannot rot
+      # underneath us.
+      - css: '#tick'
+      - text
+      - changes: verbose
