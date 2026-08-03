@@ -114,11 +114,49 @@ If you port this unit to a *system* service, the wait becomes redundant and
 `After=network-online.target` starts working — but leave the `ExecStartPre` in
 unless you have checked that the target is actually pulled in.
 
+## Backing it up
+
+The archive is the only part of this project that exists in one place. The
+repository is on GitHub and the collector is a hundred lines of config; the
+poll log, the retained responses and the proofs are not recoverable from
+anywhere if this disk fails.
+
+```sh
+./repo/deploy/backup-archive.sh /media/peters/DRIVE
+```
+
+It checks the source, snapshots `polls.db`, copies `blobs/` and `anchors/`,
+flushes to the device, then runs `verify` **and** `fsck` against the copy. The
+copy is assembled under `.incomplete-<stamp>` and only renamed to
+`evidence-archive-<stamp>` once both pass, so an interrupted run leaves
+something named for what it is rather than something mistakable for a backup.
+
+Two things it is built against, both of which otherwise produce a copy that
+looks fine:
+
+- **`cp polls.db` while the collector is running.** Journal mode is `delete`,
+  not WAL, so a copy taken mid-transaction captures a torn database whose
+  rollback journal is a separate file the copy did not include. The script uses
+  SQLite's `VACUUM INTO`, which takes a read lock and writes a consistent
+  snapshot — collection does not need to stop. The resulting file is
+  defragmented and byte-different from the original; what is preserved is the
+  rows and their chains, not the file image.
+- **A copy that fills the drive or is unplugged part-way.** `verify` cannot see
+  this: an archive holding a perfect log and zero blobs reports every chain
+  intact. That is what `fsck` is for. See "What the chains do not cover" in the
+  plugin README.
+
+A copy of a Python environment is not a backup of anything. If a drive holds
+`site-packages/`, `twilio/` or `.pyc` files it is a venv copy and worth
+nothing; what matters is `polls.db`, `blobs/` and `anchors/`.
+
 ## Migrating to an always-on host
 
 Rebuild with the steps above, then move `archive/` across intact — the poll and
 normalisation chains are computed over the rows, so the archive verifies on the
-new host without rebuilding. Run `archive verify` on both ends of the copy.
+new host without rebuilding. Run `archive verify` **and `archive fsck`** on both
+ends of the copy: verify alone would pass on a transfer that dropped every
+retained response.
 
 Stop the old host **before** copying, and do not run both: kibitzr does not
 coordinate between hosts, and two collectors writing separate archives for the
