@@ -1,0 +1,21 @@
+[Unit]
+Description=Evidence archive — nightly off-site backup
+Documentation=https://github.com/petesherratt-collab/evidence-archive
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+# Persistent, for the same reason the anchor timer is: this laptop is not
+# always on, and a backup skipped because the machine was asleep at 02:40 is
+# a backup that silently never happens on a machine that is asleep most
+# nights. Runs on the next boot instead.
+Persistent=true
+# Nothing else contends at this hour, but a fixed minute across many machines
+# is how backup targets get thundering herds. Costs nothing here.
+RandomizedDelaySec=20m
+
+# After the anchor timer (00:20) and before the upgrade (06:34), so the copy
+# taken each night includes that night's proof rather than trailing it by a
+# day.
+
+[Install]
+WantedBy=timers.target

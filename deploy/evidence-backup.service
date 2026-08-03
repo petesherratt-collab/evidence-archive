@@ -1,0 +1,26 @@
+[Unit]
+Description=Evidence archive — copy off this machine and check the copy
+Documentation=https://github.com/petesherratt-collab/evidence-archive
+# The archive is the only part of this project that exists in one place. What
+# usually destroys an archive is not disk failure but loss of the machine, so
+# the destination is off-site and this runs without anyone being present. A
+# backup that needs a human to plug something in will always lag.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/peters/evidence-collection
+# Destination is an rclone remote. Change it here rather than in the script,
+# which takes it as an argument precisely so the unit owns the policy.
+ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh api.backblazeb2.com 120
+ExecStart=/home/peters/evidence-collection/repo/deploy/backup-archive.sh b2:petesherratt-evidence-archive/laptop
+Environment=RCLONE=/home/peters/.local/bin/rclone
+
+# The copy is staged and verified here before being uploaded. Not /tmp: a
+# tmpfs /tmp would put the staging copy in RAM, and while 4MB is harmless
+# today the archive only grows.
+Environment=BACKUP_STAGE_DIR=/home/peters/evidence-collection/.backup-stage
+
+# Never allowed to disturb collection. A failed backup leaves the archive
+# exactly as it was — the source is only ever read.
+Nice=10
+IOSchedulingClass=idle

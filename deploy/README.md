@@ -122,7 +122,8 @@ poll log, the retained responses and the proofs are not recoverable from
 anywhere if this disk fails.
 
 ```sh
-./repo/deploy/backup-archive.sh /media/peters/DRIVE
+./repo/deploy/backup-archive.sh b2:BUCKET/laptop      # off-site, unattended
+./repo/deploy/backup-archive.sh /media/peters/DRIVE   # removable media
 ```
 
 It checks the source, snapshots `polls.db`, copies `blobs/` and `anchors/`,
@@ -130,6 +131,62 @@ flushes to the device, then runs `verify` **and** `fsck` against the copy. The
 copy is assembled under `.incomplete-<stamp>` and only renamed to
 `evidence-archive-<stamp>` once both pass, so an interrupted run leaves
 something named for what it is rather than something mistakable for a backup.
+
+### Off-site, nightly
+
+A removable drive needs a human present, so it will always lag. At 4 MB there
+is no reason to have one in the loop. What usually destroys an archive is not
+disk failure but loss of the machine — theft, fire, flood, or simply replacing
+the laptop — and only an off-site copy addresses that.
+
+Create a **private** B2 bucket, then an application key **restricted to that
+bucket** with `listBuckets`, `listFiles`, `readFiles`, `writeFiles` — and
+**not** `deleteFiles`. The script only ever uploads a new timestamped
+directory and never removes anything, so write-and-list is sufficient, and it
+means a compromised laptop cannot destroy the backups it made. That is the
+same append-only shape as everything else here.
+
+```sh
+curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip
+unzip -j /tmp/rclone.zip '*/rclone' -d ~/.local/bin && chmod +x ~/.local/bin/rclone
+
+~/.local/bin/rclone config create b2 b2 \
+    account YOUR_KEY_ID key YOUR_APPLICATION_KEY
+
+cp repo/deploy/evidence-backup.{service,timer} ~/.config/systemd/user/
+# set the bucket in evidence-backup.service, then:
+systemctl --user daemon-reload
+systemctl --user enable --now evidence-backup.timer
+systemctl --user start evidence-backup.service     # don't wait for 02:40
+```
+
+Runs at 02:40, `Persistent=true` so a night the laptop was asleep is caught at
+next boot rather than silently skipped. That sits after the anchor timer
+(00:20) and before the upgrade (06:34), so each night's copy contains that
+night's proof instead of trailing it by a day.
+
+**The remote does not have to be trusted.** `rclone check` compares hashes, so
+transfer corruption is caught on the way in; anything subtler — including a
+`polls.db` swapped for an older one — is caught by `fsck` on restore, via the
+anchor-to-`poll_head` cross-check. That is precisely what the chains and
+anchors were built for, so cheap untrusted storage is fine here in a way it
+would not be for most backups.
+
+The remote cannot use the rename trick, because a key without delete
+permission cannot rename (a rename is a copy plus a delete). A
+`BACKUP-COMPLETE.txt` written only after `rclone check` passes stands in for
+it: a remote directory lacking that file is a known-incomplete upload.
+
+### Restoring
+
+```sh
+~/.local/bin/rclone copy b2:BUCKET/laptop/evidence-archive-<stamp> ./restored
+kibitzr archive verify --root ./restored
+kibitzr archive fsck   --root ./restored
+```
+
+Both must pass before the copy is trusted. Nothing about a backup is
+established by its existence.
 
 Two things it is built against, both of which otherwise produce a copy that
 looks fine:
