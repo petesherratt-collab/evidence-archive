@@ -10,6 +10,7 @@
     kibitzr archive anchors         proofs taken, and what is not yet covered
     kibitzr archive anchor-upgrade  calendar attestation -> Bitcoin attestation
     kibitzr archive anchor-verify   check a proof still holds
+    kibitzr archive calibration     measured lag between change and observation
 """
 import json
 import os
@@ -48,6 +49,17 @@ def _human_bytes(count):
             return f"{count:.0f}{unit}" if unit == "B" else f"{count:.1f}{unit}"
         count /= 1024
     return f"{count:.1f}GB"
+
+
+def _duration(seconds):
+    """Render a second count the way a reader will want to compare it."""
+    sign = "-" if seconds < 0 else ""
+    seconds = abs(seconds)
+    if seconds < 90:
+        return f"{sign}{seconds:.0f}s"
+    if seconds < 5400:
+        return f"{sign}{seconds / 60:.1f}m"
+    return f"{sign}{seconds / 3600:.1f}h"
 
 
 def extend_cli(group):
@@ -97,12 +109,63 @@ def extend_cli(group):
             "and ASP.NET viewstate change raw bytes on every single request."
         )
 
+        # Controls first, and loudly. Everything else in this report is read by
+        # someone who came looking; a stalled control has to reach someone who
+        # did not, because the failure it detects is the silent one — a
+        # selector matching nothing, a swallowed transform error, a cached
+        # response — and every one of those looks exactly like a quiet target.
+        controls = store.control_checks() & set(names)
+        stalled = []
+        for name in sorted(controls):
+            consecutive, last_change_at, rows = store.normalisation_stall(name)
+            if rows and consecutive >= store.CONTROL_STALL_THRESHOLD:
+                stalled.append((name, consecutive, last_change_at))
+        if stalled:
+            click.echo("\n*** CONTROL STALLED — the pipeline may be broken ***")
+            for name, consecutive, last_change_at in stalled:
+                click.echo(
+                    f"  {name}: {consecutive} consecutive polls with no "
+                    f"document change"
+                )
+                click.echo(
+                    f"    last change {last_change_at or 'never'}"
+                )
+            click.echo(
+                "\nA control is a page that is KNOWN to change faster than it\n"
+                "is polled, so its document changing on every poll is the\n"
+                "working state. Until this clears, treat unchanged polls on\n"
+                "every OTHER check as unverified rather than as null results."
+            )
+            # Two very different faults land here and the remedies do not
+            # overlap, so the report has to separate them rather than leaving
+            # the reader to guess which end to look at.
+            click.echo(
+                "\nWhich end is broken: run\n"
+                f"  kibitzr archive calibration --check {stalled[0][0]!r}\n"
+                "If the lag has grown past the page's own publishing interval,\n"
+                "the PAGE stopped being rebuilt and the collector is fine. If\n"
+                "the lag is normal but the document is not changing, the page\n"
+                "is fresh and the COLLECTOR stopped seeing it — a selector\n"
+                "matching nothing, a swallowed transform error, or a cache."
+            )
+        elif controls:
+            click.echo(
+                f"\nControl checks ticking: {', '.join(sorted(controls))}. "
+                f"Unchanged polls\nelsewhere are corroborated for the period "
+                f"they cover."
+            )
+
         # Judge selectors on the normalised count. The raw count is inflated by
         # per-request churn on most real sites, so using it here — as this
         # command used to — reports broken selectors that are working fine.
+        #
+        # Controls are exempt: they change on every poll by construction, so
+        # they would sit permanently in this list and train the reader to
+        # ignore it.
         noisy = [
             name for name in names
-            if all_stats[name]["normalised"] >= 10
+            if name not in controls
+            and all_stats[name]["normalised"] >= 10
             and (all_stats[name]["normalised_changes"]
                  > all_stats[name]["normalised"] * 0.5)
         ]
@@ -443,3 +506,106 @@ def extend_cli(group):
                 click.echo(value)
             else:
                 click.echo(f"{value}  {check}")
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--check", "check_name", required=True,
+                  help="Check to calibrate — normally a control")
+    @click.option("--pattern", default=r'datetime="([^"]+)"',
+                  help="Regex with one group capturing an ISO 8601 instant "
+                       "in the retained response")
+    def calibration(root, check_name, pattern):
+        """Measured lag between a page changing and the archive seeing it
+
+        The configured poll period is a floor on observation resolution, not
+        the real figure. Scheduler drift, retries and fetch time all widen the
+        bracket, and none of them are visible in the period. This reads the
+        actual width off the record.
+
+        It works by comparing when a page says it was generated against when
+        the poll that retained it happened, which is only possible for a target
+        that publishes its own generation time — in practice, the control. The
+        answer does not transfer to other checks as a measurement, but it does
+        as an order of magnitude: they run through the same scheduler.
+
+        Why it matters: a claim of the form "this notice changed between X and
+        Y" is exactly as strong as the bracket around it, and quoting the
+        configured period there would overstate the archive's resolution.
+        """
+        import re  # noqa: PLC0415
+        from datetime import datetime  # noqa: PLC0415
+
+        store = _open(root)
+        try:
+            expression = re.compile(pattern)
+        except re.error as exc:
+            raise click.ClickException(f"--pattern is not a valid regex: {exc}")
+        if expression.groups != 1:
+            raise click.ClickException(
+                f"--pattern must have exactly one capturing group, "
+                f"got {expression.groups}")
+
+        observations = store.observations(check_name)
+        if not observations:
+            raise click.ClickException(
+                f"No retained responses for {check_name!r}. Calibration reads "
+                f"the generation time back out of the stored body, so it needs "
+                f"raw retention on the check.")
+
+        lags, unmatched, unreadable = [], 0, 0
+        for row in observations:
+            try:
+                body = store.get_blob(row["raw_ref"]).decode(
+                    "utf-8", errors="replace")
+            except OSError:
+                unreadable += 1
+                continue
+            found = expression.search(body)
+            if not found:
+                unmatched += 1
+                continue
+            try:
+                generated = datetime.fromisoformat(
+                    found.group(1).replace("Z", "+00:00"))
+                observed = datetime.fromisoformat(row["polled_at"])
+            except ValueError:
+                unmatched += 1
+                continue
+            lags.append(((observed - generated).total_seconds(),
+                         row["polled_at"]))
+
+        if not lags:
+            raise click.ClickException(
+                f"No generation time matched {pattern!r} in "
+                f"{len(observations)} retained response(s). Check the pattern "
+                f"against the stored body, not against the live page.")
+
+        values = sorted(lag for lag, _ in lags)
+        worst_lag, worst_at = max(lags)
+        median = values[len(values) // 2]
+        click.echo(f"{check_name}")
+        click.echo(f"  {len(values)} of {len(observations)} retained responses "
+                   f"carried a generation time")
+        click.echo(f"  min    {_duration(values[0])}")
+        click.echo(f"  median {_duration(median)}")
+        click.echo(f"  max    {_duration(worst_lag)}   at {worst_at}")
+        if unmatched:
+            click.echo(f"  {unmatched} response(s) had no parseable match")
+        if unreadable:
+            click.echo(f"  {unreadable} blob(s) could not be read")
+
+        negative = [value for value in values if value < 0]
+        if negative:
+            click.echo(
+                "\nSome lags are NEGATIVE, meaning the page claims to have "
+                "been\ngenerated after it was observed. That is a clock "
+                "disagreement\nbetween the publisher and this machine, not a "
+                "fast fetch, and it\nsets a floor on how tightly any bracket "
+                "here can be stated."
+            )
+        click.echo(
+            f"\nObservation resolution for this check is the poll period plus "
+            f"the\nlag above — not the period alone. State brackets at "
+            f"{_duration(worst_lag)} or wider\nunless you have a reason to "
+            f"quote the median."
+        )

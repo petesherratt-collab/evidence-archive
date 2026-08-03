@@ -684,6 +684,79 @@ class ArchiveStore:
             effective_from=effective_from,
         )
 
+    #: Consecutive polls a control may observe without its document changing
+    #: before the stall is reported. One is jitter — the page's own publishing
+    #: schedule can run late — and two in a row is not.
+    CONTROL_STALL_THRESHOLD = 2
+
+    def declare_control(self, check_name, detail=None):
+        """Record that a check is a control rather than a target.
+
+        The distinction has to live on the chain, not only in the config, for
+        the same reason the schedule does: a reader holding the archive without
+        the config would otherwise have no way to know that one of these series
+        is an instrument, and would read its changes as findings about the
+        world. A control's polls are evidence about the collector.
+
+        Idempotent, so a restart does not append a duplicate. Returns the
+        annotation hash if one was written, else None.
+        """
+        for annotation in self.annotations(kind="note", check_name=check_name):
+            if (annotation["check_name"] == check_name
+                    and annotation["detail"].get("role") == "control"):
+                return None
+        body = {"role": "control"}
+        body.update(detail or {})
+        return self.record_annotation("note", body, check_name=check_name)
+
+    def control_checks(self):
+        """Names of checks asserted to be controls, by note annotation."""
+        return {
+            annotation["check_name"]
+            for annotation in self.annotations(kind="note")
+            if annotation["check_name"]
+            and annotation["detail"].get("role") == "control"
+        }
+
+    def normalisation_stall(self, check_name):
+        """How long a check's document has sat still, in polls.
+
+        Returns ``(consecutive_unchanged, last_change_at, normalised_rows)``
+        counting back from the most recent normalised row.
+
+        For an ordinary target a long stall is the finding — that is what the
+        archive is for. For a control it inverts: the page is known to be
+        changing faster than it is polled, so a stall means the pipeline
+        stopped reporting change, not that the page stopped changing. A
+        selector matching nothing, a transform throwing into a swallow and a
+        response served from cache all land here, and all three otherwise look
+        exactly like a quiet fortnight.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT changed, recorded_at FROM normalisation"
+                " WHERE check_name = ? ORDER BY id DESC",
+                (check_name,),
+            ).fetchall()
+        consecutive = 0
+        last_change_at = None
+        for row in rows:
+            if row["changed"]:
+                last_change_at = row["recorded_at"]
+                break
+            consecutive += 1
+        return consecutive, last_change_at, len(rows)
+
+    def observations(self, check_name, only_with_raw=True):
+        """Poll rows for a check, oldest first, for reading back off disk."""
+        query = ("SELECT id, polled_at, ok, raw_ref, content_sha256"
+                 " FROM poll WHERE check_name = ?")
+        if only_with_raw:
+            query += " AND raw_ref IS NOT NULL"
+        query += " ORDER BY id"
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(query, (check_name,))]
+
     def gaps(self, check_name, tolerance=2.0):
         """Return intervals between polls that exceed the declared schedule.
 

@@ -300,6 +300,117 @@ Each interval is judged against the schedule in force when it opened, not the
 current one. Checks with no schedule declared are listed separately as
 unjudgeable rather than reported as fine.
 
+## Controls, and why an archive needs one
+
+Everything above makes unchanged polls *recordable*. None of it makes them
+*believable*, and those are different problems.
+
+Over a fortnight on stable sources you expect few or no document changes. A
+quiet archive is then consistent with two very different worlds:
+
+1. Nothing changed — a real null, and informative.
+2. The pipeline broke silently — a selector matching nothing and returning
+   empty every time, a response served from cache, a transform throwing into a
+   swallow.
+
+From inside the archive those are the same rows. Worse, the second world is
+*more* likely to look tidy than the first, because a broken pipeline produces
+perfectly regular unchanged polls with no failures at all.
+
+A control closes it. Mark a check `control: true` and it is asserted on the
+annotation chain as an instrument rather than a target:
+
+```yaml
+  - name: Control — collector liveness
+    url: https://example.invalid/ticker
+    period: 1h
+    archive: true
+    control: true
+    transform:
+      - css: main
+      - text
+      - changes: verbose
+```
+
+Point it at a page you publish and change on a schedule faster than you poll
+it. Then its document changing on every poll is the working state, and
+`status` inverts for that check: instead of warning that it changes too often,
+it shouts when it stops.
+
+```
+*** CONTROL STALLED — the pipeline may be broken ***
+  Control — collector liveness: 3 consecutive polls with no document change
+    last change 2026-08-03T09:31:33+00:00
+```
+
+This is not an uptime check. A liveness probe tells you a process is running.
+A control runs fetch → transform → hash → chain → store through the same code
+path as a real check, with the same selector mechanism and the same storage,
+which is why it belongs in `kibitzr.yml` as an ordinary check rather than in a
+monitoring sidecar.
+
+Four things make the difference between a control that works and one that
+merely looks like it does:
+
+- **The change must land inside the selected region.** A control page that
+  changes only where the selector strips proves nothing while reporting
+  healthy. This is the easy one to get wrong.
+- **Put deliberate noise outside the selection too.** A build nonce in a
+  footer the selector excludes. A normalisation contract has two halves —
+  select the signal, discard the churn — and a control exercising only the
+  first is half a control. It also makes the control resemble the real targets,
+  most of which churn at the raw level on every request.
+- **Host it independently of the collector.** A control on the collecting
+  machine dies with the collector and teaches you nothing.
+- **Put a machine-readable generation timestamp in the content.** Not just a
+  counter. See calibration below — and note that it is also what tells you
+  which end broke when the control stalls: a lag that has grown past the
+  page's publishing interval means the page stopped being rebuilt and the
+  collector is fine.
+
+### The limit
+
+A control proves the pipeline works for a page shaped like the control. It
+will not catch a target restructuring its HTML so that *that* check's selector
+silently matches nothing. Necessary, not sufficient; per-target review still
+matters. What it does is convert the most dangerous failure — the silent one —
+into a loud one.
+
+## Calibrating observation resolution
+
+```bash
+kibitzr archive calibration --check "Control — collector liveness"
+```
+
+The configured poll period is a floor on how tightly you can bracket a change,
+not the real figure. Scheduler drift, retries and fetch time all widen it, and
+none of them appear in the period.
+
+A control is the only target whose true change time is known, because it
+publishes it. Comparing that against `polled_at` measures the real width:
+
+```
+  47 of 48 retained responses carried a generation time
+  min    12s
+  median 7.4m
+  max    16.2m   at 2026-08-03T11:31:32+00:00
+```
+
+It reads the generation time back out of the *retained responses*, so it works
+retroactively over everything already collected and needs no extra column. The
+`--pattern` option takes a regex with one capturing group, defaulting to
+`datetime="([^"]+)"`.
+
+This matters beyond the control. Any claim of the form "this notice changed
+between X and Y" is exactly as strong as the bracket around it, and quoting the
+configured period there would overstate the archive's resolution. The measured
+figure does not transfer to other checks as a measurement, but it does as an
+order of magnitude — they run through the same scheduler.
+
+A negative lag is called out separately: it means the page claims to have been
+generated after it was observed, which is two clocks disagreeing and sets a
+floor on how tightly any bracket can honestly be stated.
+
 ## Anchoring
 
 ```

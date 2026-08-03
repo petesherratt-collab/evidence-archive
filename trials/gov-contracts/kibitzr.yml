@@ -378,12 +378,24 @@ checks:
     url: https://petesherratt-collab.github.io/evidence-control/
     period: 1h
     archive: true
+    # Puts the instrument/target distinction on the annotation chain, not just
+    # in this file. A reader holding the archive without this config would
+    # otherwise have no way to know one of these series is an instrument, and
+    # would read its changes as findings about the world. It also switches
+    # `archive status` from warning that this check changes too often to
+    # warning when it stops.
+    control: true
     transform:
-      # Everything that varies lives inside #tick and the rest of the page is
-      # byte-stable between builds, so this selector is the whole payload and
-      # there is no incidental churn to suppress. The markup is under our own
-      # control, which is the one case in this file where a selector cannot rot
-      # underneath us.
-      - css: '#tick'
+      # `main` holds the signal — an ISO generation timestamp and a sequence —
+      # and the footer holds a random build nonce that changes on EVERY build
+      # whether or not the signal did. So this selector is under test in both
+      # directions at once: it must see the timestamp move, and it must not see
+      # the nonce. A control that only ever proved the first half would leave
+      # the discard half of the normalisation contract untested, which is the
+      # half three of the targets above depend on most.
+      #
+      # It is also the one selector in this file that cannot rot underneath us,
+      # because we publish the markup.
+      - css: main
       - text
       - changes: verbose

@@ -189,6 +189,15 @@ def declare_intent(checker, store):
         logger.info("Recorded fetch-regime change for %r (%s)",
                     name, fingerprint[:12])
 
+    # `control: true` marks a check as an instrument rather than a target. It
+    # goes on the chain because a reader holding only the archive would
+    # otherwise read a control's changes as findings about the world.
+    control = conf.get("control")
+    if control and store.declare_control(
+        name, control if isinstance(control, dict) else None,
+    ):
+        logger.info("Declared %r as a control check", name)
+
 
 def before_start(app, checkers):  # noqa: ARG001 - signature fixed by kibitzr
     """Install normalisation capture on every check with ``archive`` set."""
