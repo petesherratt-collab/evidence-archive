@@ -51,6 +51,7 @@ that would ignore the per-check periods and poll every target at the same rate.
 ```sh
 ./.venv/bin/kibitzr archive status       # polls, raw changes, doc changes, last seen
 ./.venv/bin/kibitzr archive verify       # recompute chains; non-zero if broken
+./.venv/bin/kibitzr archive fsck         # blobs and proofs, which verify cannot see
 ./.venv/bin/kibitzr archive head         # the value to submit for timestamping
 ./.venv/bin/kibitzr archive gaps         # holes, read against declared schedule
 ./.venv/bin/kibitzr archive annotations  # corrections and regime changes

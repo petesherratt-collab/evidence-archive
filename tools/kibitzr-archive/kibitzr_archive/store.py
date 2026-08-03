@@ -891,6 +891,32 @@ class ArchiveStore:
 
     # -- integrity -------------------------------------------------------
 
+    def check_names(self):
+        """Every check name appearing in the poll log, sorted."""
+        with self._connect() as conn:
+            return [row[0] for row in conn.execute(
+                "SELECT DISTINCT check_name FROM poll ORDER BY check_name")]
+
+    def referenced_blobs(self):
+        """Every blob digest the poll log points at.
+
+        The set the ``blobs/`` directory is obliged to satisfy. Nothing in the
+        chains covers this: ``raw_ref`` is folded into a record hash, so a
+        reader can tell the *reference* was not altered, and cannot tell from
+        the log alone whether the file it names is still there.
+        """
+        with self._connect() as conn:
+            return {row[0] for row in conn.execute(
+                "SELECT DISTINCT raw_ref FROM poll WHERE raw_ref IS NOT NULL")}
+
+    def poll_record_hash(self, poll_id):
+        """The chain hash of one poll row, or None if there is no such row."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT record_hash FROM poll WHERE id = ?", (poll_id,)
+            ).fetchone()
+            return row["record_hash"] if row else None
+
     def head(self, check_name):
         """Return the current poll-chain head for a check, or None."""
         row = self.last_poll(check_name)

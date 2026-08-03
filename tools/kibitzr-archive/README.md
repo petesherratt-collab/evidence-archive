@@ -232,6 +232,48 @@ The chains also cross-check each other. Rewriting a normalised hash to conceal
 an amendment breaks the normalisation chain while the poll chain still
 verifies, and the retained raw response still contains the original text.
 
+### What the chains do not cover
+
+All three chains recompute from `polls.db` and nothing else. That is the right
+scope for what they claim — they detect an edited or truncated *log* — but it
+has a consequence worth stating plainly, because the failure it permits looks
+exactly like success:
+
+**An archive with an empty `blobs/` and no `anchors/` passes `verify` with
+every chain intact.** Nothing is wrong with the chains. The retained responses
+and the proofs were simply never inside them. `raw_ref` is folded into a record
+hash, so the log can prove the *reference* was not tampered with, and can say
+nothing whatever about whether the file it names still exists.
+
+That is the expected result of a copy to removable media that filled up or was
+unplugged part-way, which is the moment someone is relying on the answer. So
+there is a second command, and both must pass:
+
+```
+kibitzr archive verify   # the three chains — polls.db alone
+kibitzr archive fsck     # blobs and proofs — what no chain reaches
+```
+
+`fsck` checks that every `raw_ref` resolves to a file, that every blob's bytes
+hash to the name it is filed under (content addressing makes that the whole of
+blob integrity), that every anchor's manifest is present and still matches the
+digest its proof was taken over, and that every recorded proof file exists.
+
+It also checks the one seam with no counterpart anywhere else: an anchor names
+a `last_poll_id` and the head it committed to, so if the log no longer produces
+that head at that row, the log and the proofs beside it are **from different
+moments**. That is the signature of a `polls.db` restored from an older copy
+than the `anchors/` next to it — and both halves are internally consistent, so
+every chain verifies and every proof still validates against its manifest.
+
+Findings are graded. `BROKEN` means something is gone or contradictory that
+cannot be re-derived, and exits non-zero. `note` means an inconsistency with no
+evidence provably lost: an orphaned blob left by a crash between `put_blob` and
+its INSERT is mess rather than damage, and polls not yet covered by a proof are
+the state every archive is in for most of its life. Grading those as failures
+would make `fsck` fail continuously and therefore be ignored, which is how a
+loud check becomes a decoration.
+
 ## Correcting the record
 
 A poll row can be wrong about the world. The collector's own failures are

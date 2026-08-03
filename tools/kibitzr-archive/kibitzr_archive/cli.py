@@ -2,6 +2,7 @@
 
     kibitzr archive status          per-check polls, raw vs document changes
     kibitzr archive verify          recompute all three hash chains
+    kibitzr archive fsck            blobs and proofs, which verify cannot see
     kibitzr archive head CHECK      chain head, for submitting to a timestamp
     kibitzr archive annotations     assertions about the log, incl. corrections
     kibitzr archive annotate        append a correction; never edits a row
@@ -14,11 +15,11 @@
 """
 import json
 import os
-import sqlite3
 import sys
 
 import click
 
+from . import integrity
 from .store import ANNOTATION_KINDS, ArchiveStore
 
 
@@ -35,12 +36,7 @@ def _open(root):
 
 
 def _check_names(store):
-    with store._connect() as conn:  # noqa: SLF001
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT DISTINCT check_name FROM poll ORDER BY check_name"
-        ).fetchall()
-    return [row[0] for row in rows]
+    return store.check_names()
 
 
 def _human_bytes(count):
@@ -265,6 +261,52 @@ def extend_cli(group):
             )
             sys.exit(1)
         click.echo(f"\nAll {checked} chain(s) intact.")
+        click.echo(
+            "This covers polls.db alone. Run `archive fsck` for the retained "
+            "responses\nand the proofs, which no chain reaches."
+        )
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--quiet", is_flag=True,
+                  help="Print only findings and the verdict")
+    def fsck(root, quiet):
+        """Blobs and proofs are present and match — what verify cannot see"""
+        store = _open(root)
+        findings, counts = integrity.check(store)
+
+        if not quiet:
+            click.echo(
+                f"{counts['blobs']} blob(s) on disk, "
+                f"{counts['referenced']} referenced by the log; "
+                f"{counts['anchors']} anchor(s) recorded."
+            )
+
+        for finding in findings:
+            label = "BROKEN " if finding.severity == integrity.BROKEN else "note"
+            click.echo(f"  {label:<7} {finding.kind}: {finding.detail}")
+
+        damaged = integrity.broken(findings)
+        if damaged:
+            click.echo(
+                f"\n{len(damaged)} integrity failure(s). This archive is "
+                f"missing evidence it\nclaims to hold — do not treat it as a "
+                f"good copy.",
+                err=True,
+            )
+            sys.exit(1)
+
+        # Said explicitly because the whole point of this command is that
+        # "verify passed" was never the same statement as "nothing is missing".
+        click.echo(
+            f"\nEvery referenced response and every recorded proof is present "
+            f"and matches."
+        )
+        if counts["exposed"]:
+            click.echo(
+                f"Sound, but {counts['exposed']} poll(s) are not yet covered "
+                f"by a proof."
+            )
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
