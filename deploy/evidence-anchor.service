@@ -15,6 +15,15 @@ ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh
 ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr archive anchor
 Environment=KIBITZR_ARCHIVE_OTS=/home/peters/evidence-collection/.venv-anchor/bin/ots
 
+# Retry a failed run rather than waiting a day for the next one. Anchoring is
+# the step whose loss is unrecoverable — nothing can retroactively prove that
+# today's heads existed today — and the failures seen so far are transient
+# network ones that a second attempt clears. Restart=on-failure is permitted
+# for Type=oneshot; on-success is not, which is what we want either way.
+Restart=on-failure
+RestartSec=5min
+StartLimitBurst=5
+
 # Anchoring must never be able to disturb collection. It runs in its own
 # process against its own virtualenv, and a failure here leaves the archive
 # exactly as it was — a failed anchor is recorded as failed, not skipped.

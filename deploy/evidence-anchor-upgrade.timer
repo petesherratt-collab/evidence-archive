@@ -3,12 +3,22 @@ Description=Upgrade pending evidence-archive timestamp proofs
 Documentation=https://github.com/petesherratt-collab/evidence-archive
 
 [Timer]
-# Twice daily, and offset from the anchoring run: a proof taken this morning
-# cannot be upgraded until a Bitcoin block has committed to it, so upgrading
-# immediately after stamping would always be a no-op.
-OnCalendar=*-*-* 06,18:20:00
+# Hourly, because upgrading is idempotent and a no-op costs nothing.
+#
+# This was twice daily, on the reasoning that a proof cannot be upgraded until
+# a Bitcoin block has committed to it, so frequent attempts would be wasted.
+# True, and beside the point: the cost of an early attempt is one no-op, and
+# the cost of a *missed* attempt is up to a day of pending proofs. On 3 Aug
+# 2026 the 18:20 run found DNS unresolvable, and 11 proofs then sat pending
+# with the next opportunity twelve hours away — where a second attempt an hour
+# later would almost certainly have cleared them.
+#
+# The DNS guard did its job that evening: it waited its 120s, timed out and
+# started anyway, which is the designed behaviour. Transient network failure
+# is not something a longer pre-flight fixes. Retrying is.
+OnCalendar=hourly
 Persistent=true
-RandomizedDelaySec=20m
+RandomizedDelaySec=5m
 AccuracySec=1m
 
 [Install]

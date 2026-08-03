@@ -14,5 +14,11 @@ ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh
 ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr archive anchor-upgrade
 Environment=KIBITZR_ARCHIVE_OTS=/home/peters/evidence-collection/.venv-anchor/bin/ots
 
+# Retry rather than waiting for the next hourly slot. Upgrading is idempotent,
+# so a retry that turns out to be premature is a no-op.
+Restart=on-failure
+RestartSec=5min
+StartLimitBurst=5
+
 Nice=10
 IOSchedulingClass=idle
