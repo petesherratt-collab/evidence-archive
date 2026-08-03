@@ -131,7 +131,11 @@ def test_status_is_quiet_while_the_control_ticks(store, cli):
     result = _run(cli, store.root, "status")
 
     assert "CONTROL STALLED" not in result.output
-    assert "Control checks ticking" in result.output
+    assert "Control checks moving" in result.output
+    # Not "corroborated". A human editing the page produces these same rows,
+    # so the archive cannot license that inference from inside itself.
+    assert "corroborat" not in result.output
+    assert "known to be autonomous" in result.output
 
 
 def test_a_stalled_ordinary_check_is_not_an_alarm(store, cli):

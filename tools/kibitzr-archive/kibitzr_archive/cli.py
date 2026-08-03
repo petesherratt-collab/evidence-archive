@@ -149,10 +149,20 @@ def extend_cli(group):
                 "matching nothing, a swallowed transform error, or a cache."
             )
         elif controls:
+            # Deliberately weaker than it wants to be. All this command can see
+            # is that the document moved between polls, and a human editing the
+            # page by hand produces exactly those rows — which is how this
+            # message read on the day the control was installed and its
+            # scheduler had never once fired. Asserting corroboration from
+            # inside the archive would be the same unearned inference the
+            # control exists to prevent, so it reports the observation and
+            # names what the reader still has to establish elsewhere.
             click.echo(
-                f"\nControl checks ticking: {', '.join(sorted(controls))}. "
-                f"Unchanged polls\nelsewhere are corroborated for the period "
-                f"they cover."
+                f"\nControl checks moving: {', '.join(sorted(controls))}.\n"
+                f"That is consistent with a working pipeline, and is only "
+                f"evidence of\none if the page's changes are known to be "
+                f"autonomous — check that its\npublishing schedule actually "
+                f"ran, not merely that the content differs."
             )
 
         # Judge selectors on the normalised count. The raw count is inflated by
