@@ -140,6 +140,12 @@ free_kb=$(df -Pk "$STAGE_PARENT" | awk 'NR==2 {print $4}')
 [ "$free_kb" -ge "$need_kb" ] || \
     die "Need ~${need_kb}KB, only ${free_kb}KB free at '$STAGE_PARENT'."
 
+# Read the delimiters from the plugin rather than repeating them here. If they
+# drifted apart, fsck would silently find no heads to check and report a clean
+# copy — a check that quietly stops checking is worse than no check.
+HEADS_BEGIN="$("$PYTHON" -c 'from kibitzr_archive import integrity; print(integrity.HEADS_BEGIN)')"
+HEADS_END="$("$PYTHON" -c 'from kibitzr_archive import integrity; print(integrity.HEADS_END)')"
+
 # Back up something known-good. Copying an already-damaged archive and
 # reporting success would be the same silent failure one step earlier.
 echo "== Checking the source archive before copying it"
@@ -187,6 +193,21 @@ verify recomputes the hash chains from polls.db. fsck checks the retained
 responses in blobs/ and the proofs in anchors/, which no chain covers.
 Both must pass. See deploy/VERIFYING.md in the repository for verification
 that does not rely on this plugin at all.
+
+The combined chain heads at the moment this copy was taken are below, and
+fsck asserts the restored archive still computes them. That catches
+restoring a different backup than you meant, or a directory assembled out
+of two of them — neither of which any other check would notice.
+
+$HEADS_BEGIN
+$(cd "$STAGING" && "$PYTHON" -c '
+import sys
+from kibitzr_archive.store import ArchiveStore
+store = ArchiveStore(".")
+for name in store.check_names():
+    sys.stdout.write("%s  %s\n" % (store.combined_head(name), name))
+')
+$HEADS_END
 EOF
 
 # Before verifying, not after: reading back through the page cache would

@@ -54,6 +54,17 @@ from .store import sha256_hex
 BROKEN = "broken"
 SUSPECT = "suspect"
 
+# A backup writes its source's chain heads into this file, inside the copy.
+# Restoring can then assert that the archive it rebuilt computes the heads the
+# backup claimed — which catches restoring a different backup than you meant,
+# or a directory assembled from two of them. Same principle as the
+# anchor-to-poll_head cross-check, one layer out: the anchor seam catches a
+# polls.db older than the anchors beside it, and this catches a whole archive
+# that is not the one the manifest describes.
+BACKUP_MANIFEST = "BACKUP.txt"
+HEADS_BEGIN = "-----BEGIN CHAIN HEADS-----"
+HEADS_END = "-----END CHAIN HEADS-----"
+
 # `detail` is a whole sentence: this output is read by someone whose backup
 # has just failed at the point they needed it, and a bare digest tells them
 # nothing about what to do next.
@@ -188,6 +199,63 @@ def _check_anchors(store, findings):
     return len(rows)
 
 
+def declared_heads(root):
+    """Parse the chain heads a backup manifest claims, or {} if there is none.
+
+    Absent manifest and absent heads block are both simply "nothing declared".
+    A live archive has no manifest, and a backup taken before this existed has
+    no block; neither is a fault, so neither is reported as one.
+    """
+    path = os.path.join(root, BACKUP_MANIFEST)
+    if not os.path.exists(path):
+        return {}
+    heads, inside = {}, False
+    with open(path, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.rstrip("\n")
+            if line.strip() == HEADS_BEGIN:
+                inside = True
+            elif line.strip() == HEADS_END:
+                break
+            elif inside and line.strip():
+                # "<hexdigest>  <check name>" — split once, because check
+                # names contain spaces (and £, and em dashes).
+                digest, _, name = line.strip().partition("  ")
+                if name:
+                    heads[name.strip()] = digest
+    return heads
+
+
+def _check_declared_heads(store, findings):
+    """Compare the archive against the heads its backup manifest claims."""
+    declared = declared_heads(store.root)
+    if not declared:
+        return 0
+
+    present = set(store.check_names())
+    for name in sorted(declared):
+        if name not in present:
+            findings.append(Finding(
+                BROKEN, "check missing since backup",
+                f"the manifest claims a head for {name!r}, which this archive "
+                f"has no polls for at all"))
+            continue
+        actual = store.combined_head(name)
+        if actual != declared[name]:
+            findings.append(Finding(
+                BROKEN, "head not as declared",
+                f"{name}: this archive computes {str(actual)[:12]}, but the "
+                f"backup manifest claims {declared[name][:12]} — this is not "
+                f"the archive that manifest describes"))
+
+    for name in sorted(present - set(declared)):
+        findings.append(Finding(
+            SUSPECT, "check absent from manifest",
+            f"{name} has polls but the backup manifest does not mention it"))
+
+    return len(declared)
+
+
 def check(store):
     """Inspect the archive at ``store``; return (findings, counts).
 
@@ -197,6 +265,7 @@ def check(store):
     findings = []
     blobs, referenced = _check_blobs(store, findings)
     anchors = _check_anchors(store, findings)
+    declared = _check_declared_heads(store, findings)
 
     # Exposure, not damage — see the grading note in the module docstring.
     # `archive anchors` reports this in full; it appears here so that one
@@ -212,6 +281,7 @@ def check(store):
         "referenced": referenced,
         "anchors": anchors,
         "exposed": exposed,
+        "declared_heads": declared,
     }
 
 

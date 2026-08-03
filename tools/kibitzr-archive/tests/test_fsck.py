@@ -284,6 +284,95 @@ def test_a_rewritten_row_under_an_anchor_is_caught(store, cli):
     assert "head mismatch" in result.output
 
 
+# -- the heads a backup manifest declares ---------------------------------
+
+def _write_manifest(store, heads):
+    with open(os.path.join(store.root, integrity.BACKUP_MANIFEST), "w",
+              encoding="utf-8") as fp:
+        fp.write("Evidence archive backup\n\n")
+        fp.write(integrity.HEADS_BEGIN + "\n")
+        for name, digest in heads.items():
+            fp.write(f"{digest}  {name}\n")
+        fp.write(integrity.HEADS_END + "\n")
+
+
+def test_a_matching_manifest_passes_and_says_so(store, cli):
+    _write_manifest(store, {name: store.combined_head(name)
+                            for name in store.check_names()})
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 0
+    assert "match what the backup manifest declares" in result.output
+
+
+def test_restoring_a_different_archive_than_the_manifest_describes(store, cli):
+    """The case this exists for. Every chain verifies, every blob is present,
+    every proof is intact — it is simply not the archive that was backed up."""
+    _write_manifest(store, {name: "b" * 64 for name in store.check_names()})
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 1
+    assert "head not as declared" in result.output
+    assert "not the archive that manifest describes" in result.output
+
+
+def test_a_check_the_manifest_claims_but_the_archive_lacks(store, cli):
+    _write_manifest(store, {"a check that was never restored": "c" * 64})
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 1
+    assert "check missing since backup" in result.output
+
+
+def test_a_check_the_manifest_omits_is_noted_not_fatal(store, cli):
+    heads = {name: store.combined_head(name) for name in store.check_names()}
+    heads.pop("fts")
+    _write_manifest(store, heads)
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 0
+    assert "check absent from manifest" in result.output
+
+
+def test_check_names_with_spaces_and_non_ascii_round_trip(store, cli):
+    """Real check names are 'Departmental spend over £25k — monthly release'.
+    Splitting on the first space, or on any single space, would corrupt them."""
+    store.record_poll("Departmental spend over £25k — monthly release",
+                      url="http://z", content=b"x")
+    _write_manifest(store, {name: store.combined_head(name)
+                            for name in store.check_names()})
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 0, result.output
+    assert "3 chain head(s) match" in result.output
+    assert ("Departmental spend over £25k — monthly release"
+            in integrity.declared_heads(store.root))
+
+
+def test_no_manifest_is_not_a_finding(store, cli):
+    """The live archive has none, and neither does a backup taken before this
+    existed. Absence is not a fault."""
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 0
+    assert "manifest" not in result.output
+
+
+def test_a_manifest_without_a_heads_block_is_not_a_finding(store, cli):
+    with open(os.path.join(store.root, integrity.BACKUP_MANIFEST), "w") as fp:
+        fp.write("Evidence archive backup\n  taken 2026-01-01\n")
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 0
+    assert integrity.declared_heads(store.root) == {}
+
+
 # -- grading -------------------------------------------------------------
 
 def test_polls_awaiting_a_proof_do_not_fail_the_check(store, cli):

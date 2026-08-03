@@ -302,6 +302,11 @@ def extend_cli(group):
             f"\nEvery referenced response and every recorded proof is present "
             f"and matches."
         )
+        if counts["declared_heads"]:
+            click.echo(
+                f"All {counts['declared_heads']} chain head(s) match what the "
+                f"backup manifest declares."
+            )
         if counts["exposed"]:
             click.echo(
                 f"Sound, but {counts['exposed']} poll(s) are not yet covered "
