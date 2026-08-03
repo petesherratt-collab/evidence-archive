@@ -80,6 +80,70 @@ anonymous agent, whatever the config says later.
 Only the requests path is covered. A check routed through Firefox sends the
 browser's UA, and this setting does not reach it.
 
+### How the fetch is made
+
+An archived fetch does not use kibitzr's session as built. The plugin
+replaces it, because several of the stock behaviours would let the archive
+record something that is not true. Each is a statement the record makes on
+your behalf, so each is listed here rather than left to the source.
+
+- **Every poll reaches the origin.** kibitzr wraps its session in
+  `CacheControl`, and the fetcher is constructed once per check and lives for
+  the process. A target serving a long `max-age` would have its polls answered
+  from an in-memory cache, and those polls would enter the log as observations
+  indistinguishable from genuinely unchanged ones — collapsing the exact
+  distinction this archive exists to keep. The cache is removed and
+  `Cache-Control: no-cache, no-store` sent, which covers intermediaries too.
+- **Redirects are followed one vetted hop at a time.** requests follows them
+  internally, which would put every hop after the first outside any check. A
+  cross-origin redirect is refused by default: the poll row records the
+  *configured* URL, so following one would file another site's content under
+  this check's name.
+- **Connections go to the address that was vetted.** The hostname is resolved
+  once to decide whether the target is public; without pinning, requests
+  resolves it a second time when it opens the socket, and the name that was
+  checked and the address that is reached are two different facts. A host with
+  no vetted address is refused rather than resolved. `Host` and SNI still carry
+  the hostname, so certificate validation is unaffected.
+- **A proxied fetch is refused** unless `allow_proxy` is set. Under a proxy the
+  target is resolved at the far end of the connection, where pinning cannot
+  reach — and requests picks proxies up from `HTTP_PROXY`/`HTTPS_PROXY` without
+  the config mentioning them, so this would otherwise degrade silently.
+- **The fetch is bounded** in body size and in wall-clock time, redirects and
+  retry backoff included. kibitzr runs checks on one thread, and its own
+  backoff for a timeout is `60 * (retry + 1)`, so an unbounded fetch is not
+  local to one check — it stalls every other one behind it.
+- **A bad charset degrades rather than fails.** A page that serves undecodable
+  bytes, or names a codec that does not exist, would otherwise be able to make
+  itself un-archivable with a non-retriable error. Response-supplied encodings
+  fall back to UTF-8 with replacement and a warning; a *configured* `encoding`
+  that does not decode stays loud, because that one is your error, not the
+  page's.
+
+Defaults, all per check:
+
+```yaml
+    max_response_bytes: 10485760   # 10 MB; larger responses are refused
+    max_fetch_seconds: 60          # whole fetch, redirects included
+    max_retry_seconds: 90          # total sleep across retries
+    max_redirects: 5
+    minimum_content_bytes: 1       # shorter successful bodies fail the poll
+    allow_private_network: false   # LAN/loopback/link-local targets
+    allow_cross_origin_redirects: false
+    allow_proxy: false
+```
+
+The three `allow_*` settings are refusals by default and assertions when set:
+each one says you have accepted that the address reached may not be the
+address vetted. Turning one on is a change to what a successful poll means, so
+it belongs in a `fetch_regime` annotation — see
+[Knowing when the instrument changed](#knowing-when-the-instrument-changed).
+
+This whole section applies to the requests path only. A check routed through
+Firefox uses kibitzr's browser fetcher unchanged: no pinning, no ceilings, no
+redirect vetting, and its own cache. The poll is still logged and the response
+still retained.
+
 ## What gets stored
 
 `archive/polls.db` — one row per poll, always:
@@ -301,6 +365,11 @@ at.
   removed in Python 3.10. Patching the installed kibitzr instead would be lost
   on the next reinstall, taking the archive's failure attribution with it. If
   upstream fixes it, this override becomes redundant but stays harmless.
+- **The fetch boundary is narrow on purpose.** It is not a general SSRF
+  defence for arbitrary URLs — the targets are a short list you wrote. What it
+  prevents is a *configured* target silently becoming a different one, through
+  a redirect or through a lookup that answers differently the second time. It
+  also stops at the requests path: a Firefox-routed check keeps none of it.
 - **Archiving never fails a check.** A storage error is logged and
   swallowed; monitoring keeps running, and the transform wrapper re-raises
   nothing. Watch the logs rather than assuming silence means success.

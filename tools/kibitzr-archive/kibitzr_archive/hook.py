@@ -164,7 +164,9 @@ def declare_intent(checker, store):
     log of restarts.
     """
     from .promoter import check_fetch_id  # noqa: PLC0415
-    from .store import FETCH_SEMANTICS_VERSION  # noqa: PLC0415
+    from .store import (  # noqa: PLC0415
+        FETCH_SEMANTICS_NOTES, FETCH_SEMANTICS_VERSION,
+    )
 
     conf = checker.conf
     name = conf["name"]
@@ -181,9 +183,7 @@ def declare_intent(checker, store):
     if store.declare_fetch_regime(
         fingerprint,
         FETCH_SEMANTICS_VERSION,
-        "retry loop restored over upstream's removed collections.Callable; "
-        "transient fetch errors are now retried before being recorded as "
-        "failures, so failure counts are not comparable across this point",
+        FETCH_SEMANTICS_NOTES[FETCH_SEMANTICS_VERSION],
         check_name=name,
     ):
         logger.info("Recorded fetch-regime change for %r (%s)",

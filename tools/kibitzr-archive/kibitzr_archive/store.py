@@ -58,7 +58,25 @@ COMBINED_HEAD_VERSION = 2
 #
 # Bump this whenever a change alters WHEN a poll succeeds or fails. A reader
 # comparing failure rates across a bump is comparing two different instruments.
-FETCH_SEMANTICS_VERSION = 2
+FETCH_SEMANTICS_VERSION = 3
+
+#: What changed at each fetch-semantics version, in the words the annotation
+#: chain will carry. Kept beside the number so a bump cannot land without
+#: saying what it did to the success/failure boundary — the annotation is the
+#: only thing telling a reader that failure counts either side are not
+#: comparable.
+FETCH_SEMANTICS_NOTES = {
+    2: ("retry loop restored over upstream's removed collections.Callable; "
+        "transient fetch errors are now retried before being recorded as "
+        "failures, so failure counts are not comparable across this point"),
+    3: ("fetch path hardened: the response cache was removed so every poll "
+        "reaches the origin, redirects are followed one vetted hop at a time, "
+        "connections are pinned to the addresses that were vetted, and the "
+        "fetch is bounded by size and wall-clock deadline. A poll that would "
+        "previously have been answered from cache, followed off-origin, or "
+        "run unbounded now fails instead — so failure counts, and the meaning "
+        "of a successful poll, are not comparable across this point"),
+}
 
 # Annotation kinds. Annotations are assertions ABOUT the poll log, appended to
 # their own chain; they never modify a poll row.
