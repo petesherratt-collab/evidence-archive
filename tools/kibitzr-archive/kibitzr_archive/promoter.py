@@ -440,12 +440,39 @@ class ArchivePromoter(URLPromoter):
                     self.conf["name"], self.conf["url"])
 
     def fetch(self):
+        """Record the poll, and report a failure rather than raising one.
+
+        A raised fetch error does not stop this check, it stops the collector.
+        Nothing between here and the top of the process catches anything:
+        `Checker.check` calls `fetch` unguarded, and `App.execute_all` loops
+        over the checkers unguarded, so one exception ends the run and every
+        *other* check silently stops being polled. That is the worst available
+        outcome for an archive whose losses are unrecoverable — time spent not
+        collecting cannot be gone back for.
+
+        Upstream already treats an unreachable target as a failed check rather
+        than a fatal one whenever the failure arrives as an HTTP status: a 500
+        returns `(False, body)` and the run continues. Only the exception path
+        — a refused connection, a DNS failure, a certificate that will not
+        verify — takes the process down with it. That asymmetry is not a
+        decision anyone made, and this conforms the two: the poll is recorded
+        as failed, the error text goes back as the report, and the scheduler
+        moves on to the next check.
+
+        Demonstrated live on 3 and 4 Aug 2026, when TLS to one target failed
+        for a few minutes after boot and stopped collection on all six.
+        """
         super().fetch()
         try:
             ok, content = self._do_fetch()
-        except Exception as exc:  # noqa: BLE001 - logged then re-raised
-            self._record(ok=False, content=None, error=causal_chain(exc))
-            raise
+        except Exception as exc:  # noqa: BLE001 - recorded, then reported
+            error = causal_chain(exc)
+            self._record(ok=False, content=None, error=error)
+            # Loud, because the poll log is the only thing that will remember
+            # this and nothing is configured to alert on it.
+            logger.error("Fetch failed for %s, continuing to the next check: %s",
+                         self.conf["name"], error)
+            return False, error
         self._record(ok=ok, content=content)
         return ok, content
 

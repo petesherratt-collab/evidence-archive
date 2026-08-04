@@ -126,14 +126,18 @@ def test_chain_verifies_after_live_polls(server):
     assert fetcher.store.head("check") is not None
 
 
+def unreachable(fetcher):
+    """Repoint a live fetcher at a port nothing is listening on."""
+    fetcher.conf["url"] = "http://127.0.0.1:1/unreachable"
+    fetcher._session_fetcher = None  # noqa: SLF001 - force reconnect to bad host
+    return fetcher
+
+
 def test_failed_fetch_is_recorded_as_an_attempt(server):
     fetcher = fetcher_factory(local_check(server))
     fetcher.fetch()
 
-    fetcher.conf["url"] = "http://127.0.0.1:1/unreachable"
-    fetcher._session_fetcher = None  # noqa: SLF001 - force reconnect to bad host
-    with pytest.raises(Exception):
-        fetcher.fetch()
+    unreachable(fetcher).fetch()
 
     stats = fetcher.store.stats("check")
     assert stats["polls"] == 2  # the outage is visible, not silent
@@ -141,6 +145,36 @@ def test_failed_fetch_is_recorded_as_an_attempt(server):
     assert row["ok"] == 0
     assert row["error"]
     assert fetcher.store.verify_chain("check") == (True, None)
+
+
+def test_failed_fetch_reports_rather_than_raises(server):
+    """A fetch error must not leave the promoter, because nothing above it
+    catches: `Checker.check` and `App.execute_all` are both unguarded, so a
+    raise here ends the process and stops polling every other check too."""
+    fetcher = unreachable(fetcher_factory(local_check(server)))
+
+    ok, report = fetcher.fetch()
+
+    assert ok is False
+    # The error travels as the report, which is what kibitzr does with a
+    # failing HTTP status, and is what an `error: notify` policy expects.
+    assert report
+    assert fetcher.store.last_poll("check")["error"] == report
+
+
+def test_one_checks_failure_does_not_stop_the_others(server):
+    """The live 3-4 Aug 2026 outage in miniature: the first check cannot be
+    fetched, and the run has to reach the second one anyway."""
+    broken = unreachable(fetcher_factory(local_check(server, name="broken")))
+    healthy = fetcher_factory(local_check(server, name="healthy"))
+
+    for checker in (broken, healthy):
+        # No try/except, deliberately: this mirrors `App.execute_all`, and the
+        # test fails by erroring if a fetch raises.
+        checker.fetch()
+
+    assert broken.store.last_poll("broken")["ok"] == 0
+    assert healthy.store.last_poll("healthy")["ok"] == 1
 
 
 def test_archived_fetch_identifies_itself(server):
