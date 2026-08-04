@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kibitzr-archive"
-version = "0.1.0"
+version = "0.2.0"
 description = "Poll logging and raw-response retention for kibitzr"
 readme = "README.md"
 requires-python = ">=3.9"
