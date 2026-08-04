@@ -20,7 +20,7 @@ import sys
 import click
 
 from . import integrity
-from .store import ANNOTATION_KINDS, ArchiveStore
+from .store import ANNOTATION_KINDS, ArchiveStore, BlobMismatch
 
 
 DEFAULT_ROOT = "archive"
@@ -612,9 +612,12 @@ def extend_cli(group):
         lags, unmatched, unreadable = [], 0, 0
         for row in observations:
             try:
-                body = store.get_blob(row["raw_ref"]).decode(
+                body = store.get_blob(row["content_sha256"]).decode(
                     "utf-8", errors="replace")
-            except OSError:
+            except (OSError, BlobMismatch):
+                # A substituted blob is not calibration data. Counting it as
+                # unreadable keeps it out of the sample rather than letting it
+                # shift the lag estimate; `fsck` is what reports it as damage.
                 unreadable += 1
                 continue
             found = expression.search(body)

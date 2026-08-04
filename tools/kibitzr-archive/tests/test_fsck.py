@@ -16,7 +16,8 @@ from click.testing import CliRunner
 
 from kibitzr_archive import integrity
 from kibitzr_archive.cli import extend_cli
-from kibitzr_archive.store import ArchiveStore, sha256_hex
+from kibitzr_archive import store as store_mod
+from kibitzr_archive.store import ArchiveStore, BlobMismatch, sha256_hex
 
 
 @pytest.fixture
@@ -137,6 +138,61 @@ def test_a_blob_that_will_not_decompress_is_caught(store):
     findings, _counts = integrity.check(store)
 
     assert [f.kind for f in integrity.broken(findings)] == ["unreadable blob"]
+
+
+def test_a_substituted_response_on_an_anchored_poll_is_caught(store, cli):
+    """The forgery this module was blind to, demonstrated on 4 Aug 2026.
+
+    `raw_ref` is hashed into nothing, so repointing it is free: the row's
+    `record_hash` does not change, the chain still verifies, the anchor still
+    covers the row, and the forged blob hashes to the name it is filed under
+    because the forger chose that name. Resolving blobs through `raw_ref` meant
+    `verify`, `fsck` and `deploy/verify_independently.py` all passed on exactly
+    this sequence, against an anchored poll.
+    """
+    _anchor(store)
+    row = store.observations("ctf")[0]
+    attested = row["content_sha256"]
+
+    forged_digest = store.put_blob(b"<html>not what was served</html>")
+    with store._connect() as conn:  # noqa: SLF001
+        conn.execute("UPDATE poll SET raw_ref = ? WHERE id = ?",
+                     (forged_digest, row["id"]))
+    os.remove(store.blob_path(attested))
+
+    # Untouched, and that is the point: the chain never covered raw_ref, so it
+    # has nothing to say here. The catch has to come from somewhere else.
+    assert store.verify_chain("ctf") == (True, None)
+
+    findings, _counts = integrity.check(store)
+    kinds = {f.kind for f in integrity.broken(findings)}
+
+    assert "unbound retained response" in kinds
+    # And the response the poll actually attests to is correctly reported gone,
+    # rather than the substitute being accepted in its place.
+    assert "missing blob" in kinds
+    assert _run(cli, store.root, "fsck").exit_code == 1
+
+
+def test_reading_a_response_back_refuses_a_substitute(store):
+    """Every read path, not just fsck: a caller asking for attested bytes must
+    not be handed something else because the file was swapped underneath."""
+    digest = sorted(store.referenced_blobs())[0]
+    with gzip.open(store.blob_path(digest), "wb") as fp:
+        fp.write(b"substituted")
+
+    with pytest.raises(BlobMismatch):
+        store.get_blob(digest)
+    # Still reachable for a damage report, which has to read what is there.
+    assert store.get_blob(digest, verify=False) == b"substituted"
+
+
+def test_a_matching_raw_ref_is_not_reported(store):
+    """The invariant holds in every row the writer has ever produced, so this
+    must not fire on a healthy archive."""
+    findings, _counts = integrity.check(store)
+
+    assert not [f for f in findings if f.kind == "unbound retained response"]
 
 
 def test_an_orphan_blob_is_noted_but_does_not_fail(store, cli):
@@ -270,8 +326,8 @@ def test_a_log_older_than_its_proofs_is_caught(store, cli):
 
 
 def test_a_rewritten_row_under_an_anchor_is_caught(store, cli):
-    """The row is still there and still hashes consistently for its own
-    chain, but it is no longer the row the proof was taken over."""
+    """A blunt overwrite of a stored hash: the chain no longer recomputes, so
+    the head the proof covers cannot even be reached."""
     _anchor(store)
     last_id = store.last_poll_id("ctf")
     with store._connect() as conn:  # noqa: SLF001
@@ -281,7 +337,66 @@ def test_a_rewritten_row_under_an_anchor_is_caught(store, cli):
     result = _run(cli, store.root, "fsck")
 
     assert result.exit_code == 1
+    assert "anchored chain broken" in result.output
+
+
+def test_a_consistently_rebuilt_log_under_an_anchor_is_caught(store, cli):
+    """The attack the blunt overwrite only stands in for.
+
+    Edit a field, then recompute that row's hash and every hash after it, so
+    the log is entirely self-consistent and `verify` passes with every chain
+    intact. Then update the `anchor` table to agree — which anyone who can
+    rewrite a poll row can do, the two living in the same database.
+
+    That last step is what makes this test discriminating. Comparing the
+    anchored head against the *stored* `record_hash`, or against `poll_head`
+    from the `anchor` table, is comparing two values the same writer just set,
+    and passes. The manifest file on disk is the only copy of the head that was
+    actually stamped, so the check has to run through it.
+    """
+    manifest_ref, _proof_ref = _anchor(store)
+    with store._connect() as conn:  # noqa: SLF001
+        conn.execute("UPDATE poll SET url = ? WHERE check_name = 'ctf'",
+                     ("http://rewritten",))
+        rows = conn.execute(
+            "SELECT * FROM poll WHERE check_name = 'ctf' ORDER BY id"
+        ).fetchall()
+        prev = "0" * 64
+        for row in rows:
+            fields = {
+                "check": row["check_name"], "url": row["url"],
+                "polled_at": row["polled_at"], "ok": bool(row["ok"]),
+                "http_status": row["http_status"],
+                "content_sha256": row["content_sha256"],
+                "changed": bool(row["changed"]),
+            }
+            if row["fetch_id"] is not None:
+                fields["fetch_id"] = row["fetch_id"]
+            payload = json.dumps(dict(fields, v=1, prev=prev),
+                                 sort_keys=True, separators=(',', ':'))
+            new_hash = sha256_hex(payload.encode("utf-8"))
+            conn.execute(
+                "UPDATE poll SET prev_hash = ?, record_hash = ? WHERE id = ?",
+                (prev, new_hash, row["id"]))
+            prev = new_hash
+        # Cover the tracks in the index, as anyone with this much access would.
+        conn.execute(
+            "UPDATE anchor SET poll_head = ?, combined_head = ?"
+            " WHERE check_name = 'ctf'",
+            (prev, store_mod.combine_heads(
+                prev, "0" * 64, "0" * 64)))
+
+    # The forged log is internally perfect and the anchor table agrees with it.
+    assert store.verify_chain("ctf") == (True, None)
+    row = [r for r in store.anchors() if r["check_name"] == "ctf"][0]
+    assert row["poll_head"] == store.head("ctf")
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 1
+    # Caught only because the manifest on disk still names the stamped head.
     assert "head mismatch" in result.output
+    assert manifest_ref.endswith(".json")
 
 
 # -- the heads a backup manifest declares ---------------------------------

@@ -166,13 +166,21 @@ def test_a_control_is_exempt_from_the_loose_selector_warning(store, cli):
 # -- calibration ---------------------------------------------------------
 
 def _retain(store, check, polled_at, body):
-    """Record a poll with a retained response, as the promoter would."""
+    """Record a poll with a retained response, as the promoter would.
+
+    Both `content_sha256` and `raw_ref` are written, because that is what
+    `record_poll` does and the two are always the same digest. Setting only
+    `raw_ref` made this fixture the one shape the real writer never emits — an
+    unattested reference with no attested digest beside it — which is exactly
+    the shape the substituted-blob forgery took.
+    """
     digest = store.put_blob(body.encode("utf-8"))
     with store._connect() as conn:  # noqa: SLF001
         conn.execute(
-            "INSERT INTO poll (check_name, polled_at, ok, changed, raw_ref,"
-            " prev_hash, record_hash) VALUES (?,?,1,1,?,'x','y')",
-            (check, polled_at, digest),
+            "INSERT INTO poll (check_name, polled_at, ok, changed,"
+            " content_sha256, raw_ref, prev_hash, record_hash)"
+            " VALUES (?,?,1,1,?,?,'x','y')",
+            (check, polled_at, digest, digest),
         )
 
 
@@ -239,6 +247,27 @@ def test_calibration_survives_an_unreadable_blob(store, cli, tmp_path):
     victim = store.observations("ctl")[1]["raw_ref"]
     with open(store.blob_path(victim), "wb") as handle:
         handle.write(b"not gzip")
+
+    result = _run(cli, store.root, "calibration", "--check", "ctl")
+
+    assert result.exit_code == 0
+    assert "1 of 2 retained responses" in result.output
+
+
+def test_calibration_ignores_a_substituted_response(store, cli):
+    """A blob that no longer hashes to the digest its poll attests to is not
+    calibration data. Silently measuring it would let substituted bytes move a
+    published number, which is a smaller harm than a forged archive but the
+    same defect."""
+    _retain(store, "ctl", "2026-08-03T12:00:30+00:00",
+            '<time datetime="2026-08-03T12:00:00Z">x</time>')
+    _retain(store, "ctl", "2026-08-03T13:00:30+00:00",
+            '<time datetime="2026-08-03T13:00:00Z">y</time>')
+    victim = store.observations("ctl")[1]["content_sha256"]
+    with gzip.open(store.blob_path(victim), "wb") as handle:
+        # Well-formed gzip, decodes cleanly, wrong bytes — the case that gets
+        # through anything checking only that the file opens.
+        handle.write(b'<time datetime="2026-08-03T09:00:00Z">forged</time>')
 
     result = _run(cli, store.root, "calibration", "--check", "ctl")
 

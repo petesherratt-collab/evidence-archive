@@ -43,6 +43,31 @@ The manifest names, for each check, the three chain heads that were anchored:
 Recompute those heads from `polls.db` using section 3 and compare. If they
 match, every poll up to `last_poll_id` existed at the time the proof attests.
 
+**Check them in this order, and take each value from the link before it:**
+
+```
+.ots proof  ->  manifest bytes  ->  heads and last_poll_id in the manifest
+            ->  chains recomputed from polls.db
+```
+
+Specifically: rebuild the check's poll chain, recompute the hash **at the row
+whose id is `last_poll_id`**, and require it to equal `poll_head`. Require
+`norm_head` and `annotation_head` to occur in their own fully recomputed
+chains. Only then recompute `combined_head` from the three.
+
+Two things this ordering rules out, both of which passed before 4 Aug 2026:
+
+- **Do not compare a manifest head against a stored `record_hash`, and do not
+  consult the `anchor` table at all.** That table is an index, not evidence: it
+  lives in the same database as the rows an anchor exists to pin down, so a log
+  rewritten consistently — fields edited, hashes recomputed down the chain, the
+  anchor row updated to agree — satisfies any check made against it. The
+  manifest file is the only copy of the head that was actually stamped.
+- **Checking that `combined_head` follows from the three heads printed beside
+  it establishes nothing.** A manifest is self-consistent by construction. That
+  arithmetic is worth checking only after each of its inputs has been located
+  in a chain rebuilt from the log.
+
 The constituent heads are recorded, not just `combined_head`, precisely so this
 step never depends on reimplementing the combining formula of whatever version
 was in force. An anchor taken under `head_version` 1 stays checkable after the
@@ -124,6 +149,25 @@ before any transform. The bytes are in `blobs/<first two hex chars>/<digest>.gz`
 
 ```sh
 zcat blobs/ab/abcdef...gz | sha256sum
+```
+
+**Locate the blob by `content_sha256`, never by `raw_ref`.** Section 3 lists
+`raw_ref` among the columns that are not hashed, so a blob reached through it
+is bound to nothing: an archive holding a forged response under its own true
+digest, with `raw_ref` repointed at it and the original deleted, contradicts
+the anchored row while satisfying every check that resolves through `raw_ref`.
+`content_sha256` is hashed into the poll chain, so reaching the bytes through
+it is what ties them to the proof. The two columns have always held the same
+digest; a row where they differ is a finding, not a variant.
+
+This paragraph is the specification's original position and was always correct.
+It is spelled out because *both* implementations — `kibitzr archive fsck` and
+`verify_independently.py` — resolved blobs through `raw_ref` until 4 Aug 2026.
+Two independent implementations agreeing is not evidence that either matches
+the spec.
+
+```sh
+python3 deploy/audit_retained_responses.py archive   # every poll, this check
 ```
 
 So you can check the extraction rather than taking the extracted text on trust:

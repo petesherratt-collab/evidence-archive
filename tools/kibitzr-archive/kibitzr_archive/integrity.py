@@ -11,13 +11,25 @@ chains are undamaged because the chains never covered those bytes.
 
 That is not a hypothetical failure. It is the expected result of a copy to
 removable media that filled up or was unplugged part-way, which is precisely
-the moment someone is relying on the answer. ``raw_ref`` is folded into a
-record hash, so the log can prove the *reference* was not tampered with, and
-can say nothing at all about whether the file it names still exists.
+the moment someone is relying on the answer. The chains cannot see it because
+they never covered those bytes: a poll row commits to ``content_sha256``, the
+digest of the response, and says nothing about whether a file holding those
+bytes still exists.
+
+This docstring used to claim ``raw_ref`` was folded into a record hash. It is
+not, and never was — the hashed fields are listed in ``poll_hash_fields``, and
+``raw_ref`` has never been among them. The claim mattered, because both this
+module and ``deploy/verify_independently.py`` resolved retained responses
+*through* ``raw_ref`` on the strength of it. That made the forgery in
+``ArchiveStore.referenced_blobs`` possible, and it passed every check the
+archive had. Blobs are now resolved by ``content_sha256``, which is hashed.
 
 So this module checks the obligations the log implies but does not police:
 
-  * every ``raw_ref`` in the log resolves to a file in ``blobs/``
+  * every poll row's ``raw_ref`` still equals the ``content_sha256`` the chain
+    commits to — an unattested second name for a response is not allowed to
+    disagree with the attested one
+  * every ``content_sha256`` in the log resolves to a file in ``blobs/``
   * every blob's bytes hash to the name it is filed under
   * every anchor's manifest is present and still matches its recorded digest
   * every anchor's proof file is present
@@ -44,11 +56,12 @@ the check fail continuously and therefore be ignored, which is how a loud
 check becomes a decoration.
 """
 import gzip
+import json
 import os
 from collections import namedtuple
 
 from .anchor import ANCHOR_DIR
-from .store import sha256_hex
+from .store import (COMBINED_HEAD_VERSION, GENESIS, combine_heads, sha256_hex)
 
 
 BROKEN = "broken"
@@ -87,14 +100,31 @@ def _walk_blobs(store):
 
 
 def _check_blobs(store, findings):
-    """Reconcile the blob store against the references in the log."""
+    """Reconcile the blob store against the digests the chain commits to.
+
+    ``referenced`` comes from ``content_sha256``, the hashed field, not from
+    ``raw_ref``, which nothing attests. See ``ArchiveStore.referenced_blobs``.
+    """
     on_disk, strays = _walk_blobs(store)
     referenced = store.referenced_blobs()
+
+    # An unattested second name for a retained response is the whole of the
+    # forgery path this check used to be blind to, so it is reported before
+    # anything else and graded as damage: the row no longer says which bytes
+    # were observed.
+    for row in store.unbound_blob_rows():
+        findings.append(Finding(
+            BROKEN, "unbound retained response",
+            f"poll {row['id']} ({row['check_name']}, {row['polled_at']}) "
+            f"names blob {str(row['raw_ref'])[:12]} but the chain commits to "
+            f"content {str(row['content_sha256'])[:12]}; raw_ref is not "
+            f"hashed, so the two disagreeing means the response on disk is "
+            f"not the one this poll attests to"))
 
     for digest in sorted(referenced - set(on_disk)):
         findings.append(Finding(
             BROKEN, "missing blob",
-            f"{digest[:12]} is referenced by the log but is not in blobs/; "
+            f"{digest[:12]} is committed to by the log but is not in blobs/; "
             f"that retained response is gone"))
 
     for digest in sorted(set(on_disk) - referenced):
@@ -107,9 +137,15 @@ def _check_blobs(store, findings):
             SUSPECT, "stray file",
             f"{stray} is not a blob; an interrupted write leaves .tmp behind"))
 
-    # Content addressing makes this the whole of blob integrity. Bytes that
-    # hash to the name they are filed under cannot have been altered without
-    # also being renamed, and the name is what the log commits to.
+    # Content addressing makes this the whole of blob integrity, but only
+    # because of what the name now is. Bytes that hash to the name they are
+    # filed under cannot have been altered without also being renamed; the
+    # names checked against the log are `content_sha256`, and that field is
+    # hashed into the record chain. So for a referenced digest the three
+    # conditions the archive actually needs — the blob is present, it hashes to
+    # the digest, and that digest is the one the anchor covers — are all
+    # established here. When the name came from `raw_ref` the last of the three
+    # was missing, and it was the one that mattered.
     for digest in sorted(on_disk):
         try:
             with gzip.open(on_disk[digest], "rb") as fp:
@@ -127,74 +163,225 @@ def _check_blobs(store, findings):
     return len(on_disk), len(referenced)
 
 
+class _Chains:
+    """Chains recomputed from ``polls.db``, cached per check.
+
+    Every head an anchor names is checked against these, never against the
+    ``anchor`` table. Recomputing is the whole point: a stored ``record_hash``
+    is a claim by whoever last wrote the row, and an attacker editing a row
+    edits its stored hash in the same breath.
+    """
+
+    def __init__(self, store):
+        self._store = store
+        self._polls = {}
+        self._norms = {}
+        self._annotations = None
+
+    def polls(self, check_name):
+        """(ok, bad_row_id, {poll_id: recomputed_hash})."""
+        if check_name not in self._polls:
+            ok, bad, hashes = self._store.trace_chain(check_name)
+            self._polls[check_name] = (ok, bad, dict(hashes))
+        return self._polls[check_name]
+
+    def norms(self, check_name):
+        """(ok, bad_row_id, {recomputed hashes})."""
+        if check_name not in self._norms:
+            ok, bad, hashes = self._store.trace_normalisation_chain(check_name)
+            self._norms[check_name] = (ok, bad, {h for _id, h in hashes})
+        return self._norms[check_name]
+
+    def annotations(self):
+        if self._annotations is None:
+            ok, bad, hashes = self._store.trace_annotation_chain()
+            self._annotations = (ok, bad, {h for _id, h in hashes})
+        return self._annotations
+
+
+def _check_manifest_entry(chains, label, entry, findings):
+    """Bind one manifest entry to the recomputed log."""
+    name = entry.get("check")
+    poll_head = entry.get("poll_head")
+    last_id = entry.get("last_poll_id")
+
+    poll_ok, poll_bad, poll_hashes = chains.polls(name)
+    if not poll_hashes:
+        findings.append(Finding(
+            BROKEN, "anchor names unknown check",
+            f"{label}: a proof covers {name!r}, which this log has no "
+            f"verifiable polls for"))
+        return
+    if not poll_ok:
+        findings.append(Finding(
+            BROKEN, "anchored chain broken",
+            f"{label}: {name}'s poll chain fails to recompute at row "
+            f"{poll_bad}, so the head this proof covers cannot be reached"))
+
+    # The seam. A proof commits to a head at a stated row; if the log no longer
+    # produces that head at that row, the log and the proofs beside it are from
+    # different moments — the signature of a polls.db restored from an older
+    # copy than the anchors/ next to it, where both halves are internally
+    # consistent and every proof still validates.
+    if last_id is None:
+        findings.append(Finding(
+            BROKEN, "anchor names no row",
+            f"{label}: the entry for {name} states no last_poll_id, so its "
+            f"head cannot be located in the log"))
+    elif last_id not in poll_hashes:
+        findings.append(Finding(
+            BROKEN, "anchor ahead of log",
+            f"{label}: a proof covers {name} at poll id {last_id}, which this "
+            f"log does not contain as a verified row"))
+    elif poll_hashes[last_id] != poll_head:
+        findings.append(Finding(
+            BROKEN, "head mismatch",
+            f"{label}: {name} poll id {last_id} recomputes to "
+            f"{poll_hashes[last_id][:12]}, not the anchored "
+            f"{str(poll_head)[:12]}"))
+
+    # The other two heads are not pinned to a row id, so the requirement is
+    # occurrence: the anchored value has to be a hash the rebuilt chain
+    # actually produced. GENESIS means "nothing on this chain yet" and is
+    # always admissible.
+    norm_head = entry.get("norm_head")
+    norm_ok, norm_bad, norm_hashes = chains.norms(name)
+    if not norm_ok:
+        findings.append(Finding(
+            BROKEN, "anchored chain broken",
+            f"{label}: {name}'s normalisation chain fails to recompute at row "
+            f"{norm_bad}"))
+    if norm_head != GENESIS and norm_head not in norm_hashes:
+        findings.append(Finding(
+            BROKEN, "anchored head not in chain",
+            f"{label}: {name} is anchored at normalisation head "
+            f"{str(norm_head)[:12]}, which does not occur in the "
+            f"normalisation chain rebuilt from this log"))
+
+    ann_head = entry.get("annotation_head")
+    ann_ok, ann_bad, ann_hashes = chains.annotations()
+    if not ann_ok:
+        findings.append(Finding(
+            BROKEN, "anchored chain broken",
+            f"{label}: the annotation chain fails to recompute at row "
+            f"{ann_bad}"))
+    if ann_head != GENESIS and ann_head not in ann_hashes:
+        findings.append(Finding(
+            BROKEN, "anchored head not in chain",
+            f"{label}: anchored at annotation head {str(ann_head)[:12]}, which "
+            f"does not occur in the annotation chain rebuilt from this log — "
+            f"an anchored correction cannot be withdrawn"))
+
+    # Recomputed from the manifest's own parts, which have each just been
+    # located in a rebuilt chain. Checking the manifest's arithmetic against
+    # itself, which is all the independent verifier used to do, proves only
+    # that the manifest is self-consistent.
+    expected = combine_heads(poll_head, norm_head, ann_head,
+                             version=entry.get("head_version",
+                                               COMBINED_HEAD_VERSION))
+    if expected != entry.get("combined_head"):
+        findings.append(Finding(
+            BROKEN, "combined head does not follow",
+            f"{label}: the combined_head recorded for {name} is not what its "
+            f"own poll, normalisation and annotation heads produce"))
+
+
 def _check_anchors(store, findings):
-    """Reconcile recorded anchors against the proof files and the log."""
+    """Reconcile the anchor manifests on disk against the recomputed log.
+
+    Driven from the manifest **files**, not from the ``anchor`` table. The
+    table is a mutable index living in the same database as the rows an anchor
+    exists to pin down, so an attacker who can rewrite a poll row can rewrite
+    the anchor row that contradicts it — and this check used to compare the
+    manifest against ``manifest_sha256`` from that same table, and the poll
+    head against ``poll_head`` from it. Both comparisons were between two
+    values under one writer's control.
+
+    What is left of the table's role is completeness: it names manifests that
+    ought to exist, so a deleted proof is still reported rather than simply
+    vanishing along with the row that referenced it.
+    """
     rows = store.anchors()
+    chains = _Chains(store)
     expected = set()
+    recorded = {row["manifest_ref"]: row for row in rows}
 
-    # One anchor covers every check in a single manifest, so a proof taken
-    # over five checks is five rows sharing one pair of files. Group before
-    # touching the disk: reporting one missing file five times both buries the
-    # other findings and inflates the count a reader uses to judge severity.
-    manifests = {}
-    for row in rows:
-        manifests.setdefault(row["manifest_ref"], []).append(row)
+    anchor_root = os.path.join(store.root, ANCHOR_DIR)
+    on_disk = sorted(
+        os.path.join(ANCHOR_DIR, name)
+        for name in (os.listdir(anchor_root) if os.path.isdir(anchor_root)
+                     else [])
+        if name.endswith(".json")
+    )
 
-    for manifest_ref, group in sorted(manifests.items()):
-        expected.add(manifest_ref)
-        covers = f"covering {len(group)} check(s)"
+    for manifest_ref in on_disk:
+        label = os.path.basename(manifest_ref)
         try:
             with open(os.path.join(store.root, manifest_ref), "rb") as fp:
                 raw = fp.read()
-        except OSError:
+            manifest = json.loads(raw)
+            entries = manifest["checks"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            if manifest_ref in recorded:
+                findings.append(Finding(
+                    BROKEN, "unreadable manifest",
+                    f"{manifest_ref} is recorded as anchored but cannot be "
+                    f"read as a manifest: {exc}"))
+                expected.add(manifest_ref)
+            # Otherwise it is just a file someone left in anchors/. Nothing
+            # references it and nothing is lost, so it falls through to the
+            # unrecorded-file sweep below as mess rather than damage.
+            continue
+
+        expected.add(manifest_ref)
+
+        # A tripwire, not a link in the trust chain. Both sides are mutable and
+        # sit under one writer's control, so agreement proves nothing; what
+        # proves the bytes are the stamped bytes is the .ots over them, which
+        # `archive verify-anchor` runs and this cannot. It stays because a
+        # disagreement is still worth stopping for — one of the two has been
+        # changed since stamping, and the anchor no longer means what it says.
+        # Reported without claiming which side moved.
+        row = recorded.get(manifest_ref)
+        if row is not None and sha256_hex(raw) != row["manifest_sha256"]:
+            findings.append(Finding(
+                BROKEN, "altered manifest",
+                f"{manifest_ref} hashes to {sha256_hex(raw)[:12]}, but the "
+                f"digest recorded when it was stamped is "
+                f"{str(row['manifest_sha256'])[:12]}; the proof was taken over "
+                f"one of these and cannot cover both"))
+
+        # A manifest without its proof asserts nothing about time. It is
+        # checked against the log regardless — a manifest that no longer
+        # matches the log is worth reporting whether or not its proof survived.
+        proof_ref = manifest_ref + ".ots"
+        expected.update((proof_ref, proof_ref + ".bak"))
+        if not os.path.exists(os.path.join(store.root, proof_ref)):
+            findings.append(Finding(
+                BROKEN, "missing proof",
+                f"{proof_ref} is absent; without it the manifest asserts "
+                f"nothing about time for {len(entries)} check(s)"))
+
+        for entry in entries:
+            _check_manifest_entry(chains, label, entry, findings)
+
+    # The table as index, not as evidence: a manifest it names that is not on
+    # disk is a deletion the manifests alone could not report.
+    for manifest_ref in sorted({row["manifest_ref"] for row in rows}):
+        if manifest_ref not in expected:
+            covers = len([r for r in rows if r["manifest_ref"] == manifest_ref])
             findings.append(Finding(
                 BROKEN, "missing manifest",
-                f"{manifest_ref} is recorded as anchored {covers} but is not "
-                f"on disk"))
-        else:
-            if sha256_hex(raw) != group[0]["manifest_sha256"]:
-                findings.append(Finding(
-                    BROKEN, "altered manifest",
-                    f"{manifest_ref} no longer hashes to the value its proof "
-                    f"was taken over"))
+                f"{manifest_ref} is recorded as anchored covering {covers} "
+                f"check(s) but is not on disk"))
 
-        proof_ref = group[0]["proof_ref"]
-        if proof_ref:
-            # `ots upgrade` rewrites the proof in place and leaves the
-            # pre-upgrade version beside it. Both are ours; neither is a stray.
-            expected.update((proof_ref, proof_ref + ".bak"))
-            if not os.path.exists(os.path.join(store.root, proof_ref)):
-                findings.append(Finding(
-                    BROKEN, "missing proof",
-                    f"{proof_ref} is recorded but absent; without it the "
-                    f"manifest asserts nothing about time for {len(group)} "
-                    f"check(s)"))
-
-    # This one is genuinely per-row: each check has its own head, and the seam
-    # between the two halves of the archive. See the module docstring.
-    for row in rows:
-        if row["last_poll_id"] is not None:
-            actual = store.poll_record_hash(row["last_poll_id"])
-            if actual is None:
-                findings.append(Finding(
-                    BROKEN, "anchor ahead of log",
-                    f"{row['check_name']}: a proof covers poll id "
-                    f"{row['last_poll_id']}, which this log does not contain"))
-            elif actual != row["poll_head"]:
-                findings.append(Finding(
-                    BROKEN, "head mismatch",
-                    f"{row['check_name']}: poll id {row['last_poll_id']} now "
-                    f"hashes to {actual[:12]}, not the anchored "
-                    f"{row['poll_head'][:12]}"))
-
-    anchor_root = os.path.join(store.root, ANCHOR_DIR)
     if os.path.isdir(anchor_root):
         for filename in sorted(os.listdir(anchor_root)):
             ref = os.path.join(ANCHOR_DIR, filename)
             if ref not in expected:
                 findings.append(Finding(
                     SUSPECT, "unrecorded proof file",
-                    f"{ref} is in {ANCHOR_DIR}/ but no anchor row names it"))
+                    f"{ref} is in {ANCHOR_DIR}/ but no manifest names it"))
 
     return len(rows)
 

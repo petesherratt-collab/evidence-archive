@@ -155,7 +155,7 @@ still retained.
 | `content_sha256`, `content_length` | hash of the response as fetched |
 | `etag`, `last_modified` | server-reported, where given |
 | `changed` | against the last poll that observed content |
-| `raw_ref` | digest of the retained response |
+| `raw_ref` | legacy duplicate of `content_sha256`; **not hashed, so never resolve a blob through it** |
 | `prev_hash`, `record_hash` | chain links |
 
 `archive/blobs/` — gzipped, content-addressed, write-once. Deduplicated by
@@ -241,9 +241,17 @@ exactly like success:
 
 **An archive with an empty `blobs/` and no `anchors/` passes `verify` with
 every chain intact.** Nothing is wrong with the chains. The retained responses
-and the proofs were simply never inside them. `raw_ref` is folded into a record
-hash, so the log can prove the *reference* was not tampered with, and can say
-nothing whatever about whether the file it names still exists.
+and the proofs were simply never inside them: a poll row commits to
+`content_sha256`, the digest of the response, and says nothing about whether a
+file holding those bytes is still on disk.
+
+> Until 4 Aug 2026 this section claimed `raw_ref` was folded into a record
+> hash. It is not, and never has been — the hashed fields are listed under
+> [The chain](#the-chain) and `raw_ref` is not among them. Both `fsck` and
+> `deploy/verify_independently.py` resolved retained responses *through*
+> `raw_ref` on the strength of that claim, which made a forged response
+> substitutable on an anchored poll with every check still passing. Blobs are
+> now resolved by `content_sha256`.
 
 That is the expected result of a copy to removable media that filled up or was
 unplugged part-way, which is the moment someone is relying on the answer. So
@@ -254,17 +262,30 @@ kibitzr archive verify   # the three chains — polls.db alone
 kibitzr archive fsck     # blobs and proofs — what no chain reaches
 ```
 
-`fsck` checks that every `raw_ref` resolves to a file, that every blob's bytes
-hash to the name it is filed under (content addressing makes that the whole of
-blob integrity), that every anchor's manifest is present and still matches the
-digest its proof was taken over, and that every recorded proof file exists.
+`fsck` checks that every poll row's `raw_ref` still equals the `content_sha256`
+the chain commits to, that every `content_sha256` resolves to a file, and that
+every blob's bytes hash to the name it is filed under. Resolving through the
+hashed field is what ties the bytes on disk to the proof: content addressing is
+the whole of blob integrity only once the name being checked is one an anchor
+covers.
 
-It also checks the one seam with no counterpart anywhere else: an anchor names
-a `last_poll_id` and the head it committed to, so if the log no longer produces
-that head at that row, the log and the proofs beside it are **from different
-moments**. That is the signature of a `polls.db` restored from an older copy
-than the `anchors/` next to it — and both halves are internally consistent, so
-every chain verifies and every proof still validates against its manifest.
+It also checks the seam with no counterpart anywhere else, and checks it
+**through the manifest on disk rather than through the `anchor` table**. A
+manifest names a `last_poll_id` and the head it committed to; `fsck` rebuilds
+the chain from `polls.db`, recomputes the hash at that row, and requires it to
+equal the anchored head. The normalisation and annotation heads must likewise
+occur in their rebuilt chains, and `combined_head` is recomputed from the three.
+
+The distinction matters because the `anchor` table lives in the same database
+as the rows an anchor exists to pin down. Comparing a stored `record_hash`
+against `poll_head` from that table compares two values the same writer set, so
+a log rewritten consistently — every field edited, every hash recomputed, the
+anchor row updated to agree — passed. The manifest file is the only copy of the
+head that was actually stamped.
+
+A `polls.db` restored from an older copy than the `anchors/` next to it is the
+same seam from the other side: both halves are internally consistent, so every
+chain verifies and every proof still validates against its manifest.
 
 Findings are graded. `BROKEN` means something is gone or contradictory that
 cannot be re-derived, and exits non-zero. `note` means an inconsistency with no

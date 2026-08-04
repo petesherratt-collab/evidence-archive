@@ -284,6 +284,63 @@ def transform_id(transform_conf):
     return sha256_hex(encoded.encode('utf-8'))
 
 
+def combine_heads(poll_head, norm_head, ann_head,
+                  version=COMBINED_HEAD_VERSION):
+    """The value an anchor commits to, from three given heads.
+
+    Split out from ``ArchiveStore.combined_head`` so a verifier can recompute
+    it from the heads a *manifest* names, rather than only from the archive's
+    current state. Checking a manifest's arithmetic against itself proves
+    nothing about the log; the point is to recompute this from heads that have
+    each been found in a chain rebuilt from ``polls.db``.
+    """
+    payload = {"poll": poll_head, "norm": norm_head, "ann": ann_head,
+               "v": version}
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    return sha256_hex(encoded.encode('utf-8'))
+
+
+def _poll_fields_of(row):
+    """``poll_hash_fields`` applied to a database row."""
+    return poll_hash_fields(
+        row["check_name"], row["url"], row["polled_at"], row["ok"],
+        row["http_status"], row["content_sha256"], row["changed"],
+        row["fetch_id"],
+    )
+
+
+def _normalisation_fields_of(row):
+    return {
+        "check": row["check_name"],
+        "poll_id": row["poll_id"],
+        "recorded_at": row["recorded_at"],
+        "content_sha256": row["content_sha256"],
+        "transform_id": row["transform_id"],
+        "changed": bool(row["changed"]),
+    }
+
+
+def _annotation_fields_of(row):
+    return {
+        "kind": row["kind"],
+        "check": row["check_name"],
+        "effective_from": row["effective_from"],
+        "recorded_at": row["recorded_at"],
+        "subject_from": row["subject_from"],
+        "subject_to": row["subject_to"],
+        "detail": row["detail"],
+    }
+
+
+class BlobMismatch(Exception):
+    """A retained response does not hash to the digest it was filed under.
+
+    Raised rather than returned because every caller wanting the bytes wants
+    the *attested* bytes; there is no sensible default behaviour for "here is
+    something else instead".
+    """
+
+
 class PollRecord:
     """Outcome of recording one poll."""
 
@@ -397,10 +454,28 @@ class ArchiveStore:
         os.replace(tmp, path)
         return digest
 
-    def get_blob(self, digest):
-        """Return the stored bytes for a digest."""
+    def get_blob(self, digest, verify=True):
+        """Return the stored bytes for a digest, checking they are that digest.
+
+        The check is here rather than in each caller because a retained
+        response is only evidence while it still hashes to the value the chain
+        committed to, and a reader that skips the comparison is indistinguishable
+        from one that was handed a substitute. Content addressing makes this
+        cheap and total: bytes that hash to the name they were asked for cannot
+        have been altered.
+
+        Pass ``verify=False`` only to inspect bytes already known to be
+        damaged — a corruption report needs to read what is actually there.
+        """
         with gzip.open(self.blob_path(digest), "rb") as fp:
-            return fp.read()
+            data = fp.read()
+        if verify:
+            actual = sha256_hex(data)
+            if actual != digest:
+                raise BlobMismatch(
+                    f"blob filed as {digest[:12]} holds bytes hashing to "
+                    f"{actual[:12]}")
+        return data
 
     # -- poll log --------------------------------------------------------
 
@@ -748,11 +823,16 @@ class ArchiveStore:
         return consecutive, last_change_at, len(rows)
 
     def observations(self, check_name, only_with_raw=True):
-        """Poll rows for a check, oldest first, for reading back off disk."""
+        """Poll rows for a check, oldest first, for reading back off disk.
+
+        Selected on ``content_sha256`` rather than ``raw_ref`` for the reason
+        in ``referenced_blobs``: the attested digest is the one to read a
+        retained response by.
+        """
         query = ("SELECT id, polled_at, ok, raw_ref, content_sha256"
                  " FROM poll WHERE check_name = ?")
         if only_with_raw:
-            query += " AND raw_ref IS NOT NULL"
+            query += " AND content_sha256 IS NOT NULL"
         query += " ORDER BY id"
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, (check_name,))]
@@ -898,16 +978,53 @@ class ArchiveStore:
                 "SELECT DISTINCT check_name FROM poll ORDER BY check_name")]
 
     def referenced_blobs(self):
-        """Every blob digest the poll log points at.
+        """Every blob digest the poll log obliges ``blobs/`` to hold.
 
-        The set the ``blobs/`` directory is obliged to satisfy. Nothing in the
-        chains covers this: ``raw_ref`` is folded into a record hash, so a
-        reader can tell the *reference* was not altered, and cannot tell from
-        the log alone whether the file it names is still there.
+        Taken from ``content_sha256``, **not** from ``raw_ref``. This is the
+        whole of the difference between a bound retained response and an
+        unbound one, so it is worth being exact about why.
+
+        ``content_sha256`` is a hashed field of the poll row (see
+        ``poll_hash_fields``), so it is covered by the record hash, by the
+        chain, and by whatever anchor covers that row. It cannot be changed
+        after the fact without breaking the chain, and once anchored it cannot
+        be changed at all.
+
+        ``raw_ref`` is covered by none of that. It is an ordinary column that
+        no hash commits to. Resolving a blob through it meant an attacker who
+        could write to ``polls.db`` could store a forged response under its own
+        true digest, repoint ``raw_ref`` at it, delete the original, and pass
+        every check the archive had: the chain was untouched because
+        ``raw_ref`` is not in it, and the forged file hashed to the name it was
+        filed under because the attacker chose that name. Demonstrated against
+        anchored poll 1 on 4 Aug 2026, and `verify`, `fsck` and
+        `verify_independently.py` all reported the archive sound.
+
+        Resolving through ``content_sha256`` closes it: the digest that names
+        the file is now the digest the anchor already commits to, so producing
+        a substitute means finding a second preimage.
         """
         with self._connect() as conn:
             return {row[0] for row in conn.execute(
-                "SELECT DISTINCT raw_ref FROM poll WHERE raw_ref IS NOT NULL")}
+                "SELECT DISTINCT content_sha256 FROM poll "
+                "WHERE content_sha256 IS NOT NULL")}
+
+    def unbound_blob_rows(self):
+        """Poll rows whose ``raw_ref`` is not the digest the chain commits to.
+
+        ``raw_ref`` is redundant — ``record_poll`` has only ever written the
+        content digest into it — so the two agreeing is an invariant, not a
+        coincidence, and the archive is better off asserting it than carrying
+        a second unattested way to name the same file. A row here is either a
+        writer defect or a tampering attempt; both want looking at, and neither
+        can be told apart from the log alone.
+        """
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT id, check_name, polled_at, raw_ref, content_sha256"
+                " FROM poll"
+                " WHERE raw_ref IS NOT content_sha256"
+                " ORDER BY id")]
 
     def poll_record_hash(self, poll_id):
         """The chain hash of one poll row, or None if there is no such row."""
@@ -964,14 +1081,63 @@ class ArchiveStore:
         poll_head = self.head(check_name)
         if poll_head is None:
             return None
-        payload = {
-            "poll": poll_head,
-            "norm": self.normalisation_head(check_name) or GENESIS,
-            "ann": self.annotation_head() or GENESIS,
-            "v": COMBINED_HEAD_VERSION,
-        }
-        encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'))
-        return sha256_hex(encoded.encode('utf-8'))
+        return combine_heads(poll_head,
+                             self.normalisation_head(check_name) or GENESIS,
+                             self.annotation_head() or GENESIS)
+
+    @staticmethod
+    def _trace(rows, build_fields, version):
+        """Walk one chain, recomputing every hash from the row's own fields.
+
+        Returns ``(ok, bad_row_id, hashes)`` where ``hashes`` is the ordered
+        list of ``(row_id, recomputed_hash)`` for the rows verified *before*
+        any failure.
+
+        Returning the recomputed values, rather than only a verdict, is what
+        lets an anchor be checked against the log instead of against the
+        ``anchor`` table. A stored ``record_hash`` is a claim; the value
+        recomputed here is the one an anchor has to match, because an attacker
+        editing a row can edit its stored hash in the same breath.
+        """
+        prev_hash = GENESIS
+        hashes = []
+        for row in rows:
+            if row["prev_hash"] != prev_hash:
+                return False, row["id"], hashes
+            expected = compute_record_hash(
+                build_fields(row), prev_hash, version=version)
+            if expected != row["record_hash"]:
+                return False, row["id"], hashes
+            hashes.append((row["id"], expected))
+            prev_hash = expected
+        return True, None, hashes
+
+    def trace_chain(self, check_name):
+        """``_trace`` over a check's poll chain. See ``verify_chain``."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM poll WHERE check_name = ? ORDER BY id",
+                (check_name,),
+            ).fetchall()
+        return self._trace(rows, _poll_fields_of, POLL_CHAIN_VERSION)
+
+    def trace_normalisation_chain(self, check_name):
+        """``_trace`` over a check's normalisation chain."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM normalisation WHERE check_name = ? ORDER BY id",
+                (check_name,),
+            ).fetchall()
+        return self._trace(rows, _normalisation_fields_of,
+                           NORMALISATION_CHAIN_VERSION)
+
+    def trace_annotation_chain(self):
+        """``_trace`` over the global annotation chain."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM annotation ORDER BY id").fetchall()
+        return self._trace(rows, _annotation_fields_of,
+                           ANNOTATION_CHAIN_VERSION)
 
     def verify_chain(self, check_name):
         """Recompute the hash chain for a check.
@@ -980,55 +1146,16 @@ class ArchiveStore:
         Detects edits to logged fields and removal of rows, which is the
         point: the log has to be able to incriminate its own keeper.
         """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM poll WHERE check_name = ? ORDER BY id",
-                (check_name,),
-            ).fetchall()
-
-        prev_hash = GENESIS
-        for row in rows:
-            if row["prev_hash"] != prev_hash:
-                return False, row["id"]
-            fields = poll_hash_fields(
-                row["check_name"], row["url"], row["polled_at"], row["ok"],
-                row["http_status"], row["content_sha256"], row["changed"],
-                row["fetch_id"],
-            )
-            if compute_record_hash(fields, prev_hash) != row["record_hash"]:
-                return False, row["id"]
-            prev_hash = row["record_hash"]
-        return True, None
+        ok, bad, _hashes = self.trace_chain(check_name)
+        return ok, bad
 
     def verify_normalisation_chain(self, check_name):
         """Recompute the normalisation hash chain for a check.
 
         Same contract as ``verify_chain``: (True, None) or (False, bad_row_id).
         """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM normalisation WHERE check_name = ? ORDER BY id",
-                (check_name,),
-            ).fetchall()
-
-        prev_hash = GENESIS
-        for row in rows:
-            if row["prev_hash"] != prev_hash:
-                return False, row["id"]
-            fields = {
-                "check": row["check_name"],
-                "poll_id": row["poll_id"],
-                "recorded_at": row["recorded_at"],
-                "content_sha256": row["content_sha256"],
-                "transform_id": row["transform_id"],
-                "changed": bool(row["changed"]),
-            }
-            expected = compute_record_hash(
-                fields, prev_hash, version=NORMALISATION_CHAIN_VERSION)
-            if expected != row["record_hash"]:
-                return False, row["id"]
-            prev_hash = row["record_hash"]
-        return True, None
+        ok, bad, _hashes = self.trace_normalisation_chain(check_name)
+        return ok, bad
 
     def verify_annotation_chain(self):
         """Recompute the annotation hash chain.
@@ -1036,29 +1163,8 @@ class ArchiveStore:
         Same contract as ``verify_chain``: (True, None) or (False, bad_row_id).
         A retracted correction is exactly as detectable as a doctored poll.
         """
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM annotation ORDER BY id").fetchall()
-
-        prev_hash = GENESIS
-        for row in rows:
-            if row["prev_hash"] != prev_hash:
-                return False, row["id"]
-            fields = {
-                "kind": row["kind"],
-                "check": row["check_name"],
-                "effective_from": row["effective_from"],
-                "recorded_at": row["recorded_at"],
-                "subject_from": row["subject_from"],
-                "subject_to": row["subject_to"],
-                "detail": row["detail"],
-            }
-            expected = compute_record_hash(
-                fields, prev_hash, version=ANNOTATION_CHAIN_VERSION)
-            if expected != row["record_hash"]:
-                return False, row["id"]
-            prev_hash = row["record_hash"]
-        return True, None
+        ok, bad, _hashes = self.trace_annotation_chain()
+        return ok, bad
 
     def stats(self, check_name=None):
         """Return (polls, changes, blobs, bytes_on_disk) for reporting.
