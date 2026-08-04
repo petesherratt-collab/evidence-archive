@@ -60,7 +60,7 @@ import json
 import os
 from collections import namedtuple
 
-from .anchor import ANCHOR_DIR
+from .anchor import ANCHOR_DIR, ProofFormatError, committed_digest
 from .store import (COMBINED_HEAD_VERSION, GENESIS, combine_heads, sha256_hex)
 
 
@@ -356,11 +356,34 @@ def _check_anchors(store, findings):
         # matches the log is worth reporting whether or not its proof survived.
         proof_ref = manifest_ref + ".ots"
         expected.update((proof_ref, proof_ref + ".bak"))
-        if not os.path.exists(os.path.join(store.root, proof_ref)):
+        proof_path = os.path.join(store.root, proof_ref)
+        if not os.path.exists(proof_path):
             findings.append(Finding(
                 BROKEN, "missing proof",
                 f"{proof_ref} is absent; without it the manifest asserts "
                 f"nothing about time for {len(entries)} check(s)"))
+        else:
+            # The first link of the trust chain, and the only one that does not
+            # run through polls.db. A detached proof carries the digest of the
+            # file it was stamped over, so which bytes it covers is readable
+            # here without an OpenTimestamps client or a Bitcoin node. This is
+            # what stops a doctored `manifest_sha256` in the anchor table
+            # blessing an altered manifest: the proof is not in the database.
+            try:
+                with open(proof_path, "rb") as fp:
+                    _algorithm, covered = committed_digest(fp.read())
+            except (OSError, ProofFormatError) as exc:
+                findings.append(Finding(
+                    BROKEN, "unreadable proof",
+                    f"{proof_ref} cannot be read as an OpenTimestamps proof, "
+                    f"so what it covers is unknown: {exc}"))
+            else:
+                if covered != sha256_hex(raw):
+                    findings.append(Finding(
+                        BROKEN, "proof does not cover this manifest",
+                        f"{proof_ref} was stamped over {covered[:12]}, but "
+                        f"{manifest_ref} hashes to {sha256_hex(raw)[:12]}; the "
+                        f"proof attests to different bytes than these"))
 
         for entry in entries:
             _check_manifest_entry(chains, label, entry, findings)

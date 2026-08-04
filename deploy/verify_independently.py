@@ -22,6 +22,40 @@ import sys
 
 GENESIS = "0" * 64
 
+OTS_MAGIC = (b"\x00OpenTimestamps\x00\x00Proof\x00"
+             b"\xbf\x89\xe2\xe8\x84\xe8\x92\x94")
+OTS_HASH_OPS = {0x02: 20, 0x03: 20, 0x08: 32, 0x67: 32}
+
+
+def ots_committed_digest(raw):
+    """Section 1: the digest of the file a detached .ots proof was taken over.
+
+    A detached proof carries, straight after its header, the digest of the
+    stamped file; the rest is the path from there to a Bitcoin block. So which
+    bytes a proof covers is readable with no OpenTimestamps client and no
+    Bitcoin node, and that is the link the trust chain has to start from — it
+    is the one digest in the archive that does not live in polls.db, and so the
+    one an archivist rewriting the database cannot reach.
+
+    Returns None if this is not a proof; the caller reports that rather than
+    treating an unreadable proof as an absent one.
+    """
+    if not raw.startswith(OTS_MAGIC):
+        return None
+    offset = len(OTS_MAGIC)
+    shift = 0                      # skip the version varint
+    while offset < len(raw) and raw[offset] & 0x80:
+        offset += 1
+        shift += 7
+    offset += 1
+    if offset >= len(raw):
+        return None
+    length = OTS_HASH_OPS.get(raw[offset])
+    if length is None:
+        return None
+    digest = raw[offset + 1:offset + 1 + length]
+    return digest.hex() if len(digest) == length else None
+
 
 def canonical(payload):
     """Section 3: sorted keys, no insignificant whitespace, non-ASCII escaped."""
@@ -214,6 +248,24 @@ def main(root="archive"):
             problems.append(f"{label}: no .ots proof")
             continue
 
+        # 0. The proof covers these exact bytes. Checked first because
+        #    everything below is a statement about this manifest, and a
+        #    manifest the proof does not cover is not evidence of anything.
+        #    This is also what stops a doctored `manifest_sha256` in the
+        #    `anchor` table blessing an altered manifest: the proof is the one
+        #    digest that is not in the database.
+        with open(proof, "rb") as handle:
+            covered = ots_committed_digest(handle.read())
+        actual = hashlib.sha256(raw).hexdigest()
+        if covered is None:
+            problems.append(
+                f"{label}: {os.path.basename(proof)} cannot be read as an "
+                f"OpenTimestamps proof, so what it covers is unknown")
+        elif covered != actual:
+            problems.append(
+                f"{label}: the proof was stamped over {covered[:16]}..., but "
+                f"this manifest hashes to {actual[:16]}...")
+
         for entry in manifest["checks"]:
             check = entry["check"]
             if check not in poll_hashes or not poll_hashes[check]:
@@ -263,19 +315,25 @@ def main(root="archive"):
                     f"from its parts")
 
         anchored += 1
-        print(f"manifest {label}: sha256 "
-              f"{hashlib.sha256(raw).hexdigest()[:16]}... "
-              f"({len(manifest['checks'])} checks) bound to the log")
+        print(f"manifest {label}: sha256 {actual[:16]}... "
+              f"({len(manifest['checks'])} checks) covered by its proof and "
+              f"bound to the log")
 
-    # 4. The last link, and the only one establishing *time*. Everything above
-    #    proves the manifest describes this log; it says nothing about when the
-    #    log existed. That comes from the proof over these exact manifest
-    #    bytes, and verifying it needs the OpenTimestamps client and a Bitcoin
-    #    node. Reported honestly rather than implied: an unverified proof is
-    #    not a failure of this script, but it is also not a proof yet.
-    print(f"\n{anchored} manifest(s) bound to the log. The time proof is "
-          f"separate:\n  for each anchors/*.json, run `ots verify <file>.ots`\n"
-          f"  a proof still on calendar attestations needs `ots upgrade` first")
+    # 4. What is left, and the only thing establishing *time*. Everything above
+    #    proves the proof covers this manifest and the manifest describes this
+    #    log. None of it says when the log existed, and a proof re-stamped
+    #    today over a forged manifest would satisfy every check so far — it
+    #    would simply carry today's attestation instead of the original's.
+    #    Separating those needs the block time, which needs `ots verify` and a
+    #    Bitcoin node. Reported rather than implied: an unverified proof is not
+    #    a failure of this script, but it is not yet a proof of age.
+    print(f"\n{anchored} manifest(s) covered by their proofs and bound to the "
+          f"log.\nWhat that does NOT establish is when: for each "
+          f"anchors/*.json run\n  ots verify <file>.ots\nand read the block "
+          f"time. A proof still on calendar attestations needs `ots upgrade`\n"
+          f"first. Compare the attested time against the manifest's "
+          f"created_at: a proof\nre-stamped over altered bytes passes "
+          f"everything above and fails here.")
 
     # Current heads are reported so they can be compared against a future
     # anchor, and against anyone else's copy of this archive.

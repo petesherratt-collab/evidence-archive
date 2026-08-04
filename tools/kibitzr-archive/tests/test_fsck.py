@@ -43,6 +43,20 @@ def _run(cli, root, *args):
     return CliRunner().invoke(cli, ["archive", *args, "--root", root])
 
 
+def _proof_over(digest_hex):
+    """A detached OTS proof header committing to `digest_hex`.
+
+    Only the header is synthesised: it is what carries the digest of the
+    stamped file, and it is the part the archive checks offline. The
+    attestation path after it is what `ots verify` walks, and needs a Bitcoin
+    node, so no test here can produce a meaningful one.
+    """
+    from kibitzr_archive import anchor as anchor_mod
+
+    return (anchor_mod.OTS_MAGIC + b"\x01" + b"\x08"
+            + bytes.fromhex(digest_hex) + b"\x00" * 8)
+
+
 def _anchor(store, check_name="ctf"):
     """Record an anchor with a real manifest on disk, without invoking ots."""
     from kibitzr_archive import anchor as anchor_mod
@@ -54,7 +68,7 @@ def _anchor(store, check_name="ctf"):
         fp.write(encoded)
     proof_ref = manifest_ref + ".ots"
     with open(os.path.join(store.root, proof_ref), "wb") as fp:
-        fp.write(b"not a real proof")
+        fp.write(_proof_over(sha256_hex(encoded)))
     store.record_anchor(store.head_components(check_name), "opentimestamps",
                         manifest_ref, sha256_hex(encoded), proof_ref=proof_ref)
     return manifest_ref, proof_ref
@@ -303,6 +317,113 @@ def test_an_unrecorded_file_in_the_anchor_dir_is_noted(store, cli):
 
     assert result.exit_code == 0
     assert "unrecorded proof file" in result.output
+
+
+# -- forged archives that used to pass ------------------------------------
+#
+# Three sequences, each of which the archive reported as sound before 4 Aug
+# 2026. They are grouped because they share a premise: the attacker can write
+# to polls.db and to the files beside it, which is the position the keeper of
+# this archive is in, and the position the whole design exists to constrain.
+# What the attacker cannot do is produce a Bitcoin attestation dated in the
+# past, so every check below ends up resting on the .ots.
+
+def test_forged_1_substituted_response_via_edited_raw_ref(store, cli):
+    """`raw_ref` is hashed into nothing, so repointing it at a forged blob
+    leaves every chain intact. Covered in full by
+    test_a_substituted_response_on_an_anchored_poll_is_caught; repeated here as
+    the first of the three so the group reads as one story."""
+    _anchor(store)
+    row = store.observations("ctf")[0]
+    forged = store.put_blob(b"<html>forged</html>")
+    with store._connect() as conn:  # noqa: SLF001
+        conn.execute("UPDATE poll SET raw_ref = ? WHERE id = ?",
+                     (forged, row["id"]))
+    os.remove(store.blob_path(row["content_sha256"]))
+
+    assert store.verify_chain("ctf") == (True, None)
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 1
+    assert "unbound retained response" in result.output
+
+
+def test_forged_2_manifest_head_not_matching_the_log_at_last_poll_id(store, cli):
+    """The attacker controls the manifest, its recorded digest, and the proof
+    file — everything except a backdated attestation.
+
+    So the manifest is edited to name a head the log does not produce, then
+    re-stamped and re-recorded so that nothing *except* the log contradicts it.
+    The only remaining witness is the recomputed chain at `last_poll_id`.
+    """
+    manifest_ref, proof_ref = _anchor(store)
+    path = os.path.join(store.root, manifest_ref)
+    manifest = json.loads(open(path, "rb").read())
+    manifest["checks"][0]["poll_head"] = "a" * 64
+    manifest["checks"][0]["combined_head"] = store_mod.combine_heads(
+        "a" * 64, manifest["checks"][0]["norm_head"],
+        manifest["checks"][0]["annotation_head"])
+    encoded = json.dumps(manifest, sort_keys=True,
+                         separators=(',', ':')).encode("ascii")
+    with open(path, "wb") as fp:
+        fp.write(encoded)
+    # Re-stamp and re-record, so the proof covers these bytes and the index
+    # agrees. Both are things the attacker can do.
+    with open(os.path.join(store.root, proof_ref), "wb") as fp:
+        fp.write(_proof_over(sha256_hex(encoded)))
+    with store._connect() as conn:  # noqa: SLF001
+        conn.execute("UPDATE anchor SET manifest_sha256 = ?",
+                     (sha256_hex(encoded),))
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 1
+    assert "head mismatch" in result.output
+
+
+def test_forged_3_edited_manifest_sha256_cannot_bless_an_altered_manifest(
+        store, cli):
+    """The manifest is altered and the `anchor` table updated to match it.
+
+    Comparing the manifest against `manifest_sha256` is comparing two values
+    the same writer just set, so that check passes. The proof is the only copy
+    of the digest that is not in the database, and it still commits to the
+    bytes that were actually stamped.
+    """
+    manifest_ref, _proof_ref = _anchor(store)
+    path = os.path.join(store.root, manifest_ref)
+    manifest = json.loads(open(path, "rb").read())
+    manifest["created_at"] = "2020-01-01T00:00:00+00:00"
+    encoded = json.dumps(manifest, sort_keys=True,
+                         separators=(',', ':')).encode("ascii")
+    with open(path, "wb") as fp:
+        fp.write(encoded)
+    with store._connect() as conn:  # noqa: SLF001
+        conn.execute("UPDATE anchor SET manifest_sha256 = ?",
+                     (sha256_hex(encoded),))
+
+    # The index now agrees with the altered manifest, so the tripwire between
+    # them is silent — as it must be, both sides having been set together.
+    findings, _counts = integrity.check(store)
+    assert not [f for f in findings if f.kind == "altered manifest"]
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 1
+    assert "proof does not cover this manifest" in result.output
+
+
+def test_a_proof_that_cannot_be_parsed_is_not_silently_accepted(store, cli):
+    """A proof whose format is unreadable establishes nothing about which
+    bytes it covers, and must not be treated as though it did."""
+    _manifest_ref, proof_ref = _anchor(store)
+    with open(os.path.join(store.root, proof_ref), "wb") as fp:
+        fp.write(b"not an OpenTimestamps proof at all")
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 1
+    assert "unreadable proof" in result.output
 
 
 # -- the log and the proofs from different moments -----------------------

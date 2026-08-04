@@ -30,6 +30,26 @@ on the OpenTimestamps calendar servers, which is a weaker claim. `archive
 anchors` reports which state each proof is in, and does not describe a pending
 proof as complete.
 
+**Without the client or a node**, you can still read *which bytes* a proof
+covers. A detached proof carries the digest of the stamped file immediately
+after its header:
+
+```
+\x00OpenTimestamps\x00\x00Proof\x00\xbf\x89\xe2\xe8\x84\xe8\x92\x94
+<version varint> <hash-op byte: 0x08 = sha256> <32-byte digest>
+```
+
+Compare that digest against `sha256` of the manifest. `archive fsck` and
+`verify_independently.py` both do this, and it is the link the rest of the
+chain hangs from — the proof is the only digest in the archive that does not
+live in `polls.db`, so it is the only one an archivist rewriting the database
+cannot reach.
+
+It establishes *which bytes*, not *when*. A proof re-stamped today over an
+altered manifest passes this check, carrying today's attestation instead of the
+original's. Only `ots verify` and the block time it reports separate those, so
+compare the attested time against the manifest's `created_at`.
+
 ## 2. Check the manifest against the archive
 
 The manifest names, for each check, the three chain heads that were anchored:

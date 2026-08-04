@@ -60,6 +60,71 @@ class AnchorError(Exception):
     """Raised when the external timestamping tool cannot be used."""
 
 
+class ProofFormatError(Exception):
+    """Raised when a ``.ots`` file cannot be read as an OpenTimestamps proof."""
+
+
+#: Serialisation header every detached OTS proof starts with.
+OTS_MAGIC = (b"\x00OpenTimestamps\x00\x00Proof\x00"
+             b"\xbf\x89\xe2\xe8\x84\xe8\x92\x94")
+
+#: Op tag -> (name, digest length). The tag names the hash the proof was taken
+#: over; only the length is needed to read the digest out.
+OTS_HASH_OPS = {
+    0x02: ("sha1", 20),
+    0x03: ("ripemd160", 20),
+    0x08: ("sha256", 32),
+    0x67: ("keccak256", 32),
+}
+
+
+def _read_varint(data, offset):
+    """Read OTS's base-128 varint (LSB first, high bit continues)."""
+    value = shift = 0
+    while True:
+        if offset >= len(data):
+            raise ProofFormatError("truncated varint")
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, offset
+        shift += 7
+
+
+def committed_digest(raw):
+    """Return (algorithm, hexdigest) of the file a detached proof covers.
+
+    This is the link that makes the trust chain start at the proof rather than
+    at anything in ``polls.db``. A detached OTS proof carries, right after its
+    header, the digest of the file it was stamped over; everything after that
+    is the path from that digest to a Bitcoin block. So *which bytes a proof
+    covers* is readable offline, with no OpenTimestamps client and no Bitcoin
+    node, and comparing it to the manifest on disk is what stops an altered
+    manifest being blessed by a matching digest in the ``anchor`` table.
+
+    What this does **not** establish is *when*. A proof re-stamped today over a
+    forged manifest would satisfy this check and carry today's attestation
+    instead of the original's; separating those needs ``ots verify`` and the
+    block time it reports. See ``deploy/VERIFYING.md``.
+    """
+    if not raw.startswith(OTS_MAGIC):
+        raise ProofFormatError("not an OpenTimestamps detached proof")
+    offset = len(OTS_MAGIC)
+    _version, offset = _read_varint(raw, offset)
+    if offset >= len(raw):
+        raise ProofFormatError("truncated before the file hash operation")
+    tag = raw[offset]
+    offset += 1
+    if tag not in OTS_HASH_OPS:
+        raise ProofFormatError(f"unknown file hash op {tag:#04x}")
+    name, length = OTS_HASH_OPS[tag]
+    digest = raw[offset:offset + length]
+    if len(digest) != length:
+        raise ProofFormatError(f"truncated {name} digest")
+    return name, digest.hex()
+
+
 def find_ots(explicit=None):
     """Locate the OpenTimestamps client.
 
