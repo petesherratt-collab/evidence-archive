@@ -12,6 +12,15 @@ Documentation=https://github.com/petesherratt-collab/evidence-archive
 # A user unit cannot order against a system target, so the wait is explicit
 # below. It is bounded: an unreachable target should be recorded as unreachable,
 # not silently not polled.
+#
+# The archive is the point of the process; never let a restart loop truncate it.
+# StartLimit* belongs in [Unit] and is parsed nowhere else. It sat under
+# [Service] until 4 Aug 2026, where systemd logged `Unknown key ... ignoring`
+# once per start and applied the 10s/5 default instead — so the guarantee the
+# comment asserted was not in effect, the same way `After=network-online.target`
+# was not. RestartSec=60 kept five starts from ever landing inside ten seconds,
+# so nothing had gone wrong yet; it would have the moment that changed.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -23,8 +32,6 @@ ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr run
 # the per-check periods and poll every target at the same rate.
 Restart=always
 RestartSec=60
-# The archive is the point of the process; never let a restart loop truncate it.
-StartLimitIntervalSec=0
 
 # Collection is I/O-bound and should yield to anything interactive.
 Nice=10

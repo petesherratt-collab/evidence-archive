@@ -6,6 +6,11 @@ Documentation=https://github.com/petesherratt-collab/evidence-archive
 # retroactively prove that today's heads existed today. So this runs daily from
 # the start rather than waiting for the schema to settle — proofs accumulate,
 # and an anchor taken under an older format stays valid forever.
+#
+# StartLimit* is only read in [Unit]; under [Service] it is silently ignored.
+# The value here matches the default it was accidentally deferring to, so the
+# behaviour does not change — it is now declared where it is read.
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
@@ -22,7 +27,6 @@ Environment=KIBITZR_ARCHIVE_OTS=/home/peters/evidence-collection/.venv-anchor/bi
 # for Type=oneshot; on-success is not, which is what we want either way.
 Restart=on-failure
 RestartSec=5min
-StartLimitBurst=5
 
 # Anchoring must never be able to disturb collection. It runs in its own
 # process against its own virtualenv, and a failure here leaves the archive

@@ -6,6 +6,11 @@ Documentation=https://github.com/petesherratt-collab/evidence-archive
 # proof rests on the calendar operators staying honest and available — a weaker
 # claim than the one the archive wants to make, and one that quietly expires if
 # a calendar disappears. This is what closes that gap.
+#
+# StartLimit* is only read in [Unit]; under [Service] it is silently ignored.
+# The value here matches the default it was accidentally deferring to, so the
+# behaviour does not change — it is now declared where it is read.
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
@@ -18,7 +23,6 @@ Environment=KIBITZR_ARCHIVE_OTS=/home/peters/evidence-collection/.venv-anchor/bi
 # so a retry that turns out to be premature is a no-op.
 Restart=on-failure
 RestartSec=5min
-StartLimitBurst=5
 
 Nice=10
 IOSchedulingClass=idle
