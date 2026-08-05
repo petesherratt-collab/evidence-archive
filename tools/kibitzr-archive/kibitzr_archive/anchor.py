@@ -240,6 +240,36 @@ def stamp(store, check_names, ots=None, created_at=None):
     if code != 0 and proof_ref is None:
         logger.error("ots stamp failed: %s", output)
 
+    # A manifest without a proof is not an anchor. Keeping it in anchors/ and
+    # indexing it in the anchor table creates an impossible completeness
+    # contract: fsck must report a missing proof, but the failed attempt never
+    # produced one. Record the attempt on the append-only annotation chain and
+    # remove the unattested manifest instead. A later successful retry creates
+    # a new manifest at its honest later time.
+    if proof_ref is None:
+        store.record_annotation("note", {
+            "event": "anchor_attempt_failed",
+            "attempted_manifest": manifest_ref,
+            "manifest_sha256": digest,
+            "checks": [entry["check"] for entry in manifest["checks"]],
+            "ots_output": output,
+            "returncode": code,
+        }, effective_from=manifest["created_at"])
+        try:
+            os.remove(manifest_path)
+        except FileNotFoundError:
+            pass
+        return {
+            "status": "failed",
+            "manifest_ref": None,
+            "attempted_manifest_ref": manifest_ref,
+            "manifest_sha256": digest,
+            "proof_ref": None,
+            "checks": [entry["check"] for entry in manifest["checks"]],
+            "anchor_ids": [],
+            "output": output,
+        }
+
     recorded = []
     for components in manifest["checks"]:
         recorded.append(store.record_anchor(
@@ -252,6 +282,7 @@ def stamp(store, check_names, ots=None, created_at=None):
     return {
         "status": status,
         "manifest_ref": manifest_ref,
+        "attempted_manifest_ref": manifest_ref,
         "manifest_sha256": digest,
         "proof_ref": proof_ref,
         "checks": [entry["check"] for entry in manifest["checks"]],
@@ -288,6 +319,70 @@ def upgrade(store, ots=None):
         else:
             results.append((manifest_ref, "pending", output))
     return results
+
+
+def reconcile_failed_attempts(store):
+    """Move legacy proof-less attempts out of the anchor namespace.
+
+    Releases before 0.2.1 retained a manifest and anchor-table rows when
+    ``ots stamp`` produced no proof. That made fsck correctly report a missing
+    proof forever. Preserve the attempt as an append-only annotation and as an
+    unattested file outside ``anchors/``, then remove only its failed index
+    rows. Anything with a proof, or any non-failed row, is refused.
+    """
+    failed = {}
+    for row in store.anchors(status="failed"):
+        failed.setdefault(row["manifest_ref"], []).append(row)
+
+    moved = []
+    destination_root = os.path.join(store.root, "failed-anchor-attempts")
+    for manifest_ref, rows in sorted(failed.items()):
+        if any(row["proof_ref"] for row in rows):
+            raise AnchorError(
+                f"refusing {manifest_ref}: a failed row still names a proof")
+        if any(row["status"] != "failed" for row in store.anchors()
+               if row["manifest_ref"] == manifest_ref):
+            raise AnchorError(
+                f"refusing {manifest_ref}: it also has a non-failed row")
+
+        manifest_path = os.path.join(store.root, manifest_ref)
+        proof_path = manifest_path + ".ots"
+        if os.path.exists(proof_path):
+            raise AnchorError(
+                f"refusing {manifest_ref}: a proof exists at {proof_path}")
+
+        detail = {
+            "event": "legacy_failed_anchor_reconciled",
+            "manifest_ref": manifest_ref,
+            "manifest_sha256": rows[0]["manifest_sha256"],
+            "checks": sorted(row["check_name"] for row in rows),
+            "original_detail": rows[0]["detail"],
+            "reason": ("ots stamp produced no proof; legacy code indexed the "
+                       "attempt as an anchor, making fsck report it missing"),
+        }
+        store.record_annotation(
+            "correction", detail, effective_from=rows[0]["anchored_at"])
+
+        destination = None
+        if os.path.exists(manifest_path):
+            os.makedirs(destination_root, exist_ok=True)
+            destination = os.path.join(
+                destination_root, os.path.basename(manifest_ref))
+            if os.path.exists(destination):
+                raise AnchorError(
+                    f"refusing {manifest_ref}: {destination} already exists")
+            os.replace(manifest_path, destination)
+
+        with store._connect() as conn:  # noqa: SLF001 - maintenance operation
+            conn.execute(
+                "DELETE FROM anchor WHERE manifest_ref = ? AND status = ?"
+                " AND proof_ref IS NULL", (manifest_ref, "failed"))
+        moved.append({
+            "manifest_ref": manifest_ref,
+            "preserved_as": destination,
+            "rows": len(rows),
+        })
+    return moved
 
 
 def verify(store, manifest_ref, ots=None):

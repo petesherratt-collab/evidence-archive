@@ -26,6 +26,11 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=/home/peters/evidence-collection
 ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh
+# The readiness helper has a 120-second ceiling. systemd's default start
+# timeout is commonly 90 seconds, which killed the helper before its own
+# bounded policy completed on 5 Aug 2026. Leave enough room for the helper to
+# finish and for kibitzr to initialise; this does not change the retry policy.
+TimeoutStartSec=150
 ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr run
 # kibitzr keeps its own schedule from each check's `period`, so this is a
 # long-lived process rather than a timer. A timer firing `once` would ignore

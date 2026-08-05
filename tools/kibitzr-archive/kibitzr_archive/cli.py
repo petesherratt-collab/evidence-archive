@@ -428,15 +428,16 @@ def extend_cli(group):
         except AnchorError as exc:
             raise click.ClickException(str(exc))
 
+        if result["status"] == "failed":
+            click.echo(f"\nStamping failed: {result['output']}", err=True)
+            click.echo(
+                "Recorded on the annotation chain; no anchor was claimed "
+                "and no proof-less manifest was retained.", err=True)
+            sys.exit(1)
         click.echo(f"Manifest  {result['manifest_ref']}")
         click.echo(f"          sha256 {result['manifest_sha256']}")
         for check in result["checks"]:
             click.echo(f"  anchored  {check}")
-        if result["status"] == "failed":
-            click.echo(f"\nStamping failed: {result['output']}", err=True)
-            click.echo("Recorded as failed rather than silently skipped.",
-                       err=True)
-            sys.exit(1)
         click.echo(
             "\nProof is PENDING: it currently rests on the calendar servers, "
             "not\non Bitcoin. Run `archive anchor-upgrade` in a few hours to "
@@ -480,6 +481,28 @@ def extend_cli(group):
                 f"\n{len(pending)} proof(s) still PENDING — resting on the "
                 "calendar servers\nrather than Bitcoin. Run "
                 "`archive anchor-upgrade`."
+            )
+
+    @archive.command("reconcile-failed-anchors")
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    def reconcile_failed_anchors(root):
+        """Preserve and unindex legacy stamp attempts that made no proof"""
+        from .anchor import (  # noqa: PLC0415
+            AnchorError, reconcile_failed_attempts,
+        )
+
+        store = _open(root)
+        try:
+            repaired = reconcile_failed_attempts(store)
+        except AnchorError as exc:
+            raise click.ClickException(str(exc))
+        if not repaired:
+            click.echo("No legacy failed anchor attempts need reconciliation.")
+            return
+        for item in repaired:
+            click.echo(
+                f"Reconciled {item['manifest_ref']} ({item['rows']} row(s)); "
+                f"preserved as {item['preserved_as']}"
             )
 
     @archive.command(name="anchor-upgrade")

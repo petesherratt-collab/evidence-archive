@@ -10,18 +10,38 @@ regenerated, and a third-party archive rests on trusting the third party. The
 claim this repo is built around is narrower and defensible: an archive should be
 able to incriminate its own keeper.
 
-Three properties, none of which the underlying tools provide:
+The archive adds three properties that the underlying monitor does not provide:
 
 - **Integrity** — the content you hold is the content that was recorded.
-- **Time** — it was recorded when it says it was.
+- **Time** — an externally timestamped head bounds when the records behind it
+  already existed.
 - **Continuity** — no record between two others has been removed.
+
+The wording matters. A hash chain alone establishes integrity and continuity,
+not time. Time begins at an upgraded OpenTimestamps proof, and only for records
+covered by that proof. It does not establish that the source was truthful or
+that the collector ran when no poll was recorded.
+
+## Current status
+
+Collection of six checks began on 1 August 2026. The running stack is
+`kibitzr 8.0.0` from PyPI plus version 0.2.1 of this plugin; it is not a private
+fork of kibitzr. Version 0.2.0 is the first release whose verifiers bind retained
+responses and anchor manifests to values outside the mutable database in the
+way the verification specification requires.
+
+The public [control target](https://github.com/petesherratt-collab/evidence-control)
+changes independently of the collector and exercises the end-to-end fetch,
+decode, hash, change-detection and recording path. A point-in-time
+[off-site snapshot](https://github.com/petesherratt-collab/evidence-archive-snapshot)
+provides a separately stored copy while permanent object-storage backups are
+being established.
 
 ## Layout
 
 ### `tools/kibitzr-archive/`
 
-A plugin for [kibitzr](https://github.com/kibitzr/kibitzr), not a fork. It adds
-the three things a monitor needs before its output is evidence:
+A plugin for [kibitzr](https://github.com/kibitzr/kibitzr), not a fork. It adds:
 
 - **A poll log.** Every poll is recorded, not only the ones that changed. Without
   this, silence cannot distinguish *checked, unchanged* from *not watching* from
@@ -34,17 +54,50 @@ the three things a monitor needs before its output is evidence:
 - **A hash chain.** Each poll row's `record_hash` covers its own fields plus the
   previous row's hash. Anchoring the latest hash anchors the whole history behind
   it, which is where an external timestamp proof attaches.
+- **A normalisation chain.** The selected or transformed document is committed
+  separately from the raw response, so raw page churn can be distinguished from
+  a meaningful document change.
+- **An annotation chain.** Corrections, schedule declarations and regime changes
+  are append-only evidence rather than mutable notes beside the archive.
+- **External anchors.** OpenTimestamps proofs bind manifests of current chain
+  heads to Bitcoin attestations once upgraded.
+- **Fetcher containment.** The requests path rejects private-network targets and
+  proxies by default, pins vetted DNS results, bounds redirects, response size
+  and wall-clock time, and records one target's failure without stopping the
+  remaining checks.
 
 Registers through kibitzr's `kibitzr.fetcher` and `kibitzr.cli` entry points, so
 it applies to any kibitzr tree without patching it.
 
 ```
-kibitzr archive status     # per-check polls, changes, last observation
-kibitzr archive verify     # recompute every chain; non-zero exit if broken
-kibitzr archive head       # chain heads — the values to submit for timestamping
+kibitzr archive status       # polls, raw/document changes, last observation
+kibitzr archive verify       # recompute the database chains
+kibitzr archive fsck         # check blobs, manifests, proofs and backup heads
+kibitzr archive gaps         # compare observed polls with declared schedules
+kibitzr archive anchors      # proofs taken and polls not yet covered
+kibitzr archive calibration  # measure control-target observation lag
 ```
 
-22 tests, including tamper detection. Verified on Python 3.13.3.
+The current suite contains 173 tests, including forged-archive and tamper cases,
+and passes on Python 3.13.3:
+
+```sh
+python3 -m pip install -e 'tools/kibitzr-archive[test]'
+python3 -m pytest tools/kibitzr-archive/tests -q
+```
+
+See [`tools/kibitzr-archive/README.md`](tools/kibitzr-archive/README.md) for the
+data model and CLI, [`deploy/README.md`](deploy/README.md) for operation and
+backup, and [`deploy/VERIFYING.md`](deploy/VERIFYING.md) for the verification
+specification and its limits.
+
+### `deploy/`
+
+User-level systemd units, bounded network-readiness checks, anchoring and backup
+automation live here. `verify_independently.py` reimplements the verification
+specification using only Python's standard library and imports no plugin code.
+Agreement between it and the plugin is useful cross-checking; neither replaces
+checking the OpenTimestamps proof against its Bitcoin attestation.
 
 ### `trials/gov-contracts/`
 
@@ -56,14 +109,37 @@ withdrawn, with the original usually unrecoverable afterwards.
 `probe.py` fetches a URL twice and diffs, to find selectors that produce a
 stable hash.
 
-**Status: not yet collecting.** Every URL and selector in `kibitzr.yml` is
-unverified — the environment it was written in could not reach `gov.uk` hosts.
-Selectors marked `PROVISIONAL` are guesses. Selector tuning is the step that
-decides whether this produces two useful alerts a week or fifty useless ones a
-day; it is not a formality.
+The original provisional watchlist has since been reduced to six live checks:
+five UK procurement or spending sources plus the external control target.
+Selectors were tuned against live responses. Three sources still change at the
+raw-response level on every request because of page-generated nonces while their
+selected document region remains stable; this is why status reports `raw chg`
+and `doc chg` separately.
 
-The four watched-notice slots are deliberately unfilled placeholders. Inventing
-notice IDs would be worse than leaving them blank.
+No individual watched-notice slots are currently published. Adding them remains
+a deliberate editorial and operational decision, not a setup placeholder.
+
+## Verify an archive
+
+Run both local checks: they cover different obligations.
+
+```sh
+kibitzr archive verify --root /path/to/archive
+kibitzr archive fsck   --root /path/to/archive
+python3 deploy/verify_independently.py /path/to/archive
+```
+
+`verify` recomputes the poll, normalisation and annotation chains in
+`polls.db`. `fsck` additionally checks every referenced retained response,
+manifest, proof file and recorded backup head. The independent verifier starts
+at the digest embedded in each detached `.ots` proof, follows it through the
+manifest, and recomputes the database chains rather than trusting stored head
+values.
+
+These offline checks establish which bytes a proof covers, but not when they
+were attested. For every manifest, also run `ots verify anchors/<manifest>.ots`
+and compare the reported Bitcoin block time with the manifest's `created_at`.
+A pending calendar proof is not yet a Bitcoin timestamp.
 
 ## A note on publishing the watchlist
 
@@ -76,8 +152,7 @@ knowingly.
 
 ## Provenance
 
-Split out of `distributed-ethics-site2` with history preserved — it had been
-developed on an unmerged branch there, alongside a Vercel-deployed site it has
-nothing to do with. Commit hashes differ from the originals because the history
-was rewritten to drop unrelated paths; the six commits, their messages, authors
-and dates are otherwise intact.
+Originally split out of `distributed-ethics-site2` with its six relevant commits
+preserved. Commit hashes differ from their originals because unrelated paths
+were removed during the split. Subsequent collection, verifier and deployment
+work was developed in this repository.
