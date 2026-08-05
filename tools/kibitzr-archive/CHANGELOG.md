@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — proposed, unreleased
+## 0.3.0 — unreleased
 
 - Replace the single-file dashboard with an atomic static evidence browser.
 - Add hash-verified document reconstruction, neutral before/after diffs,
@@ -16,5 +16,4 @@
 - Document the private collector, explicit review, static export, and public
   host boundary for a possible future Vercel deployment.
 
-This section prepares a release; the package version remains `0.2.1` and no
-`v0.3.0` tag has been created.
+The package now declares `0.3.0`; no `v0.3.0` tag has been created.
