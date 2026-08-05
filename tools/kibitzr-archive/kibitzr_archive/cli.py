@@ -12,6 +12,7 @@
     kibitzr archive anchor-upgrade  calendar attestation -> Bitcoin attestation
     kibitzr archive anchor-verify   check a proof still holds
     kibitzr archive calibration     measured lag between change and observation
+    kibitzr archive report          write a self-contained HTML dashboard
 """
 import json
 import os
@@ -212,6 +213,25 @@ def extend_cli(group):
                        "chain, or ran before this feature existed):")
             for name in unarchived:
                 click.echo(f"  - {name}")
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--output", default="report", show_default=True,
+                  help="Static report directory to write")
+    @click.option("--config", "config_path", type=click.Path(exists=True),
+                  help="kibitzr.yml used to reproduce current transforms")
+    @click.option("--archive-label", default="Evidence archive", show_default=True,
+                  help="Neutral public label for this archive")
+    def report(root, output, config_path, archive_label):
+        """Write a static, hash-backed evidence browser"""
+        from .report import write  # noqa: PLC0415
+
+        try:
+            path = write(_open(root), output, config_path=config_path,
+                         archive_label=archive_label)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Evidence browser written to {path / 'index.html'}")
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
@@ -428,15 +448,16 @@ def extend_cli(group):
         except AnchorError as exc:
             raise click.ClickException(str(exc))
 
+        if result["status"] == "failed":
+            click.echo(f"\nStamping failed: {result['output']}", err=True)
+            click.echo(
+                "Recorded on the annotation chain; no anchor was claimed "
+                "and no proof-less manifest was retained.", err=True)
+            sys.exit(1)
         click.echo(f"Manifest  {result['manifest_ref']}")
         click.echo(f"          sha256 {result['manifest_sha256']}")
         for check in result["checks"]:
             click.echo(f"  anchored  {check}")
-        if result["status"] == "failed":
-            click.echo(f"\nStamping failed: {result['output']}", err=True)
-            click.echo("Recorded as failed rather than silently skipped.",
-                       err=True)
-            sys.exit(1)
         click.echo(
             "\nProof is PENDING: it currently rests on the calendar servers, "
             "not\non Bitcoin. Run `archive anchor-upgrade` in a few hours to "
@@ -480,6 +501,28 @@ def extend_cli(group):
                 f"\n{len(pending)} proof(s) still PENDING — resting on the "
                 "calendar servers\nrather than Bitcoin. Run "
                 "`archive anchor-upgrade`."
+            )
+
+    @archive.command("reconcile-failed-anchors")
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    def reconcile_failed_anchors(root):
+        """Preserve and unindex legacy stamp attempts that made no proof"""
+        from .anchor import (  # noqa: PLC0415
+            AnchorError, reconcile_failed_attempts,
+        )
+
+        store = _open(root)
+        try:
+            repaired = reconcile_failed_attempts(store)
+        except AnchorError as exc:
+            raise click.ClickException(str(exc))
+        if not repaired:
+            click.echo("No legacy failed anchor attempts need reconciliation.")
+            return
+        for item in repaired:
+            click.echo(
+                f"Reconciled {item['manifest_ref']} ({item['rows']} row(s)); "
+                f"preserved as {item['preserved_as']}"
             )
 
     @archive.command(name="anchor-upgrade")

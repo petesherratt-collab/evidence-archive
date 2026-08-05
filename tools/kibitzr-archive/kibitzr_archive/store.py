@@ -837,6 +837,14 @@ class ArchiveStore:
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, (check_name,))]
 
+    def recent_polls(self, limit=30):
+        """Most recent poll rows across checks, newest first, for reporting."""
+        limit = max(1, min(int(limit), 1000))
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT id, check_name, polled_at, ok, http_status, changed,"
+                " error FROM poll ORDER BY id DESC LIMIT ?", (limit,))]
+
     def gaps(self, check_name, tolerance=2.0):
         """Return intervals between polls that exceed the declared schedule.
 

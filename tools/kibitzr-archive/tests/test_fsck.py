@@ -245,6 +245,27 @@ def test_a_missing_proof_file_is_a_failure(store, cli):
     assert "missing proof" in result.output
 
 
+def test_a_failed_stamp_does_not_leave_fsck_permanently_broken(
+        store, cli, monkeypatch):
+    """An external calendar outage is exposure, not lost evidence.
+
+    The failed attempt must remain auditable without manufacturing an anchor
+    record whose necessarily absent proof makes every future fsck fail.
+    """
+    from kibitzr_archive import anchor as anchor_mod
+
+    monkeypatch.setattr(anchor_mod, "find_ots", lambda explicit=None: "ots")
+    monkeypatch.setattr(anchor_mod, "_run",
+                        lambda argv, timeout: (1, "calendars unreachable"))
+    anchor_mod.stamp(store, ["ctf"])
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 0
+    assert "missing proof" not in result.output
+    assert "not yet covered" in result.output
+
+
 def test_a_missing_manifest_is_a_failure(store, cli):
     manifest_ref, _proof_ref = _anchor(store)
     os.remove(os.path.join(store.root, manifest_ref))
