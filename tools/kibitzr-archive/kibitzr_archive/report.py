@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import html.parser
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from . import integrity
 from .anchor import ANCHOR_DIR, ProofFormatError, committed_digest
@@ -25,32 +28,106 @@ from .store import BlobMismatch, sha256_hex, transform_id
 
 
 CSS = """
-:root{--bg:#f5f7f9;--panel:#fff;--text:#17212b;--muted:#647181;--line:#d9e0e7;
---good:#176b43;--warn:#8a5a00;--bad:#a72b23;--add:#def7e8;--del:#ffe5e1}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);
+:root{color-scheme:light;
+--page-background:#f5f7f9;--panel-background:#fff;--text-primary:#17212b;
+--text-muted:#526170;--border:#cbd4dc;--link:#075fa8;--link-visited:#65459b;
+--success:#176b43;--warning:#765000;--failure:#9d2821;--code-background:#edf1f4;
+--diff-added-background:#d7f3e2;--diff-added-text:#07552f;
+--diff-removed-background:#ffe0dc;--diff-removed-text:#821b15;--focus-ring:#006fd6}
+:root[data-theme="dark"]{color-scheme:dark;
+--page-background:#10161c;--panel-background:#18212b;--text-primary:#edf2f6;
+--text-muted:#b4bec8;--border:#465563;--link:#7fc4ff;--link-visited:#c8a9ff;
+--success:#72d8a5;--warning:#f2c15c;--failure:#ff928a;--code-background:#222d37;
+--diff-added-background:#123f2b;--diff-added-text:#a7efc8;
+--diff-removed-background:#4b211e;--diff-removed-text:#ffbbb5;--focus-ring:#79c7ff}
+@media(prefers-color-scheme:dark){:root:not([data-theme]){color-scheme:dark;
+--page-background:#10161c;--panel-background:#18212b;--text-primary:#edf2f6;
+--text-muted:#b4bec8;--border:#465563;--link:#7fc4ff;--link-visited:#c8a9ff;
+--success:#72d8a5;--warning:#f2c15c;--failure:#ff928a;--code-background:#222d37;
+--diff-added-background:#123f2b;--diff-added-text:#a7efc8;
+--diff-removed-background:#4b211e;--diff-removed-text:#ffbbb5;--focus-ring:#79c7ff}}
+*{box-sizing:border-box}body{margin:0;background:var(--page-background);color:var(--text-primary);
 font:14px/1.5 system-ui,sans-serif}main{max-width:1280px;margin:auto;padding:28px}
 h1{margin:0;font-size:26px}h2{font-size:18px;margin:0 0 12px}h3{font-size:15px}
-.sub,.muted{color:var(--muted)}.cards{display:grid;grid-template-columns:
-repeat(auto-fit,minmax(180px,1fr));gap:12px}.card,section{background:var(--panel);
-border:1px solid var(--line);border-radius:9px}.card{padding:15px}.card span{display:block;
-color:var(--muted)}.card strong{font-size:22px}.good{color:var(--good)}
-.warn{color:var(--warn)}.bad{color:var(--bad)}section{padding:18px;margin-top:16px;
+.report-tools{display:flex;justify-content:flex-end;margin-bottom:14px}.theme-control{display:flex;
+align-items:center;gap:8px}.theme-control label{font-weight:600}.theme-control select{font:inherit;
+color:var(--text-primary);background:var(--panel-background);border:1px solid var(--border);
+border-radius:6px;padding:6px 30px 6px 9px}.sub,.muted{color:var(--text-muted)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.card,section{background:var(--panel-background);border:1px solid var(--border);border-radius:9px}
+.card{padding:15px}.card span{display:block;color:var(--text-muted)}.card strong{font-size:22px}
+.good{color:var(--success)}.warn{color:var(--warning)}.bad{color:var(--failure)}
+section{padding:18px;margin-top:16px;
 overflow:auto}table{border-collapse:collapse;width:100%}th,td{text-align:left;
-vertical-align:top;padding:9px;border-bottom:1px solid var(--line)}th{color:var(--muted)}
+vertical-align:top;padding:9px;border-bottom:1px solid var(--border)}th{color:var(--text-muted)}
 code,.hash{font-family:ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}
-.pill{border-radius:99px;padding:2px 7px;background:#e8edf2;white-space:nowrap}
-.pill.complete{background:#dcf3e6;color:var(--good)}.pill.pending{background:#fff0c2;
-color:var(--warn)}.pill.unanchored,.pill.failed{background:#ffe2df;color:var(--bad)}
+code,pre{background:var(--code-background)}pre{padding:10px;border-radius:6px}
+.pill{border-radius:99px;padding:2px 7px;background:var(--code-background);white-space:nowrap}
+.pill.complete{background:var(--diff-added-background);color:var(--diff-added-text)}
+.pill.pending{background:var(--code-background);color:var(--warning)}
+.pill.unanchored,.pill.failed{background:var(--diff-removed-background);color:var(--diff-removed-text)}
 .diff{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,monospace}
-.diff .add{background:var(--add);color:#075b32}.diff .del{background:var(--del);color:#8b1e17}
-details pre{white-space:pre-wrap;overflow-wrap:anywhere}.notice{border-left:4px solid var(--warn);
-padding:10px 12px;background:#fff7df}.danger{border-left-color:var(--bad);background:#fff0ee}
-a{color:#075fa8}dl.grid{display:grid;grid-template-columns:minmax(170px,260px) 1fr;
+.diff .add{background:var(--diff-added-background);color:var(--diff-added-text)}
+.diff .del{background:var(--diff-removed-background);color:var(--diff-removed-text)}
+details pre{white-space:pre-wrap;overflow-wrap:anywhere}.notice{border-left:4px solid var(--warning);
+padding:10px 12px;background:var(--code-background)}.danger{border-left-color:var(--failure)}
+a{color:var(--link)}a:visited{color:var(--link-visited)}
+a:focus-visible,button:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--focus-ring);outline-offset:3px}
+dl.grid{display:grid;grid-template-columns:minmax(170px,260px) 1fr;
 gap:7px 16px}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}
 @media(max-width:650px){main{padding:14px}dl.grid{grid-template-columns:1fr}table{font-size:12px}}
-@media(prefers-color-scheme:dark){:root{--bg:#10161c;--panel:#18212b;--text:#edf2f6;
---muted:#a3afbc;--line:#34414d;--add:#123f2b;--del:#4b211e}}
+@media print{:root,:root[data-theme="dark"]{color-scheme:light;--page-background:#fff;
+--panel-background:#fff;--text-primary:#000;--text-muted:#333;--border:#777;--link:#000;
+--link-visited:#000;--success:#174b32;--warning:#604000;--failure:#781c16;
+--code-background:#f1f1f1;--diff-added-background:#e4f3e8;--diff-added-text:#123d27;
+--diff-removed-background:#f8e5e2;--diff-removed-text:#641813;--focus-ring:#000}
+.report-tools{display:none}body{font-size:11pt}main{max-width:none;padding:0}section,.card{box-shadow:none;break-inside:avoid}}
 """.strip()
+
+
+THEME_JS = """(function () {
+  'use strict';
+  var STORAGE_KEY = 'evidence-archive-report-theme';
+  var VALID_THEMES = ['system', 'light', 'dark'];
+
+  function validTheme(value) {
+    return VALID_THEMES.indexOf(value) !== -1 ? value : 'system';
+  }
+
+  function readTheme() {
+    try { return validTheme(window.localStorage.getItem(STORAGE_KEY)); }
+    catch (error) { return 'system'; }
+  }
+
+  function applyTheme(value) {
+    var theme = validTheme(value);
+    if (theme === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', theme);
+    document.querySelectorAll('[data-theme-selector]').forEach(function (selector) {
+      selector.value = theme;
+    });
+    return theme;
+  }
+
+  function saveTheme(value) {
+    try { window.localStorage.setItem(STORAGE_KEY, value); }
+    catch (error) { /* Theme switching remains available for this page. */ }
+  }
+
+  var initialTheme = readTheme();
+  applyTheme(initialTheme);
+
+  document.addEventListener('DOMContentLoaded', function () {
+    applyTheme(initialTheme);
+    document.querySelectorAll('[data-theme-selector]').forEach(function (selector) {
+      selector.addEventListener('change', function (event) {
+        var theme = applyTheme(event.target.value);
+        saveTheme(theme);
+      });
+    });
+  });
+}());
+"""
 
 
 def _h(value):
@@ -71,9 +148,13 @@ def _page(title, body, depth=0):
     prefix = "../" * depth
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
-<title>{_h(title)}</title><link rel="stylesheet" href="{prefix}assets/report.css"></head>
-<body><main>{body}</main></body></html>"""
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<title>{_h(title)}</title><script src="{prefix}assets/theme.js"></script>
+<link rel="stylesheet" href="{prefix}assets/report.css"></head>
+<body><main><div class="report-tools"><div class="theme-control">
+<label for="theme-select">Theme</label><select id="theme-select" data-theme-selector>
+<option value="system">System default</option><option value="light">Light</option>
+<option value="dark">Dark</option></select></div></div>{body}</main></body></html>"""
 
 
 def _query(store, sql, params=()):
@@ -110,6 +191,99 @@ def _git_commit():
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return "unavailable"
+
+
+def _verification_result(store):
+    findings, _counts = integrity.check(store)
+    chains_ok = all(
+        store.verify_chain(name)[0]
+        and store.verify_normalisation_chain(name)[0]
+        for name in store.check_names()
+    ) and store.verify_annotation_chain()[0]
+    return "verified" if not integrity.broken(findings) and chains_ok else "broken"
+
+
+class _ReportHTMLParser(html.parser.HTMLParser):
+    """Collect local references and fragment targets without executing HTML."""
+
+    def __init__(self):
+        super().__init__()
+        self.references = []
+        self.identifiers = set()
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if values.get("id"):
+            self.identifiers.add(values["id"])
+        for attribute in ("href", "src"):
+            if values.get(attribute):
+                self.references.append((tag, attribute, values[attribute]))
+
+
+def validate_report(root):
+    """Reject broken local references and machine-specific path disclosure."""
+    root = Path(root).resolve()
+    pages = sorted(root.rglob("*.html"))
+    if not pages:
+        raise ValueError("generated report contains no HTML pages")
+    parsed = {}
+    forbidden = ("/home/", "file://")
+    windows_path = re.compile(r"[A-Za-z]:\\Users\\")
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        if any(value in text for value in forbidden) or windows_path.search(text):
+            raise ValueError(f"generated page discloses a development-machine path: {page.name}")
+        parser = _ReportHTMLParser()
+        parser.feed(text)
+        parsed[page] = parser
+
+    failures = []
+    for page, parser in parsed.items():
+        for _tag, _attribute, reference in parser.references:
+            split = urlsplit(reference)
+            if split.scheme or split.netloc:
+                continue
+            if not split.path:
+                target = page
+            else:
+                target = (page.parent / unquote(split.path)).resolve()
+                try:
+                    target.relative_to(root)
+                except ValueError:
+                    failures.append(f"{page.relative_to(root)} escapes report root: {reference}")
+                    continue
+            if not target.exists():
+                failures.append(f"{page.relative_to(root)} has missing target: {reference}")
+                continue
+            if split.fragment and target.suffix.lower() == ".html":
+                target_parser = parsed.get(target)
+                if target_parser is None:
+                    target_parser = _ReportHTMLParser()
+                    target_parser.feed(target.read_text(encoding="utf-8"))
+                    parsed[target] = target_parser
+                if unquote(split.fragment) not in target_parser.identifiers:
+                    failures.append(f"{page.relative_to(root)} has missing fragment: {reference}")
+    if failures:
+        raise ValueError("invalid generated report links:\n" + "\n".join(failures))
+    return {"html_pages": len(pages), "references_checked": sum(
+        len(parser.references) for parser in parsed.values())}
+
+
+def _publication_manifest(store, target, generated, verification_result):
+    """Describe this derived publication build, never the evidential archive."""
+    return {
+        "schema_version": 1,
+        "report_kind": "derived-evidence-archive-report",
+        "generated_at": generated,
+        "generator_version": _plugin_version(),
+        "generator_commit": _git_commit(),
+        "verification_result": verification_result,
+        "verification_time": generated,
+        "poll_count": store.stats()["polls"],
+        "target_count": len(store.check_names()),
+        "published_change_page_count": len(list((target / "changes").glob("poll-*.html"))),
+        "published_response_count": len(list((target / "responses").glob("*.txt"))),
+    }
 
 
 def _normalise(raw, conf, expected_transform):
@@ -318,6 +492,7 @@ def _anchor_coverage(store, poll):
 def _copy_evidence(store, target, digest):
     raw = store.get_blob(digest)
     (target / "responses" / f"{digest}.txt").write_bytes(raw)
+    return True
 
 
 def _copy_anchor(store, target, coverage):
@@ -347,11 +522,13 @@ def _change_page(store, target, before_poll, before_norm, after_poll, after_norm
     before, after, unavailable = _reconstruct(
         store, before_poll, before_norm, after_poll, after_norm, conf)
     coverage = _anchor_coverage(store, after_poll)
+    copied = {}
     for poll in (before_poll, after_poll):
         try:
-            _copy_evidence(store, target, poll["content_sha256"])
+            copied[poll["id"]] = _copy_evidence(
+                store, target, poll["content_sha256"])
         except (FileNotFoundError, BlobMismatch, OSError, EOFError):
-            pass
+            copied[poll["id"]] = False
     _copy_anchor(store, target, coverage)
     schedule = None
     annotations = _annotations(store, after_poll["check_name"], before_poll, after_poll)
@@ -391,6 +568,12 @@ def _change_page(store, target, before_poll, before_norm, after_poll, after_norm
     else:
         anchor_extra = '<p class="notice danger">This poll is not covered by a completed or pending proof.</p>'
     schedule_text = f"every {schedule:g} seconds" if isinstance(schedule, (int, float)) else "not recorded"
+    before_raw_link = (
+        f'<a download href="../responses/{before_poll["content_sha256"]}.txt">Before raw response</a>'
+        if copied[before_poll["id"]] else "Before raw response unavailable")
+    after_raw_link = (
+        f'<a download href="../responses/{after_poll["content_sha256"]}.txt">After raw response</a>'
+        if copied[after_poll["id"]] else "After raw response unavailable")
     body = f"""
 <p><a href="../index.html">← Evidence archive dashboard</a></p>
 <h1>{_h(after_poll['check_name'])}</h1><p class="sub">Document change observed at {_h(_utc(after_poll['polled_at']))}</p>
@@ -414,8 +597,7 @@ python deploy/verify_independently.py archive
 ots verify anchors/&lt;manifest&gt;.json.ots</pre></section>
 <section><h2>Annotations</h2><ul>{ann_html}</ul></section>
 <section><h2>Raw responses</h2><p>These downloads use <code>.txt</code> and are not embedded or executed.</p>
-<p><a download href="../responses/{before_poll['content_sha256']}.txt">Before raw response</a> ·
-<a download href="../responses/{after_poll['content_sha256']}.txt">After raw response</a></p></section>"""
+<p>{before_raw_link} · {after_raw_link}</p></section>"""
     filename = f"poll-{after_poll['id']:06d}.html"
     (target / "changes" / filename).write_text(_page(
         f"{after_poll['check_name']} change", body, depth=1), encoding="utf-8")
@@ -478,8 +660,7 @@ def _recent_rows(store, target, configs, chain_state):
     return output
 
 
-def _render_index(store, target, configs, archive_label):
-    generated = _now()
+def _render_index(store, target, configs, archive_label, generated):
     findings, counts = integrity.check(store)
     broken = integrity.broken(findings)
     names = store.check_names()
@@ -515,6 +696,7 @@ def _render_index(store, target, configs, archive_label):
 <div class="card {'warn' if counts['exposed'] or pending else 'good'}"><span>Timestamp coverage</span><strong>{_h(timestamp_state)}</strong></div>
 <div class="card"><span>Polls / lifetime failures</span><strong>{total['polls']} / {total['failures']}</strong></div></div>
 <section><h2>About this view</h2><p>This static report is derived from the archive; it is not evidence itself. Raw change means fetched response bytes moved. Document change means the content selected by the recorded transform moved. Only hash-reproduced documents receive a verified diff.</p>
+<p><a href="publication-manifest.json">Publication build manifest</a> — provenance for this derived export, not an evidential archive manifest.</p>
 <dl class="grid"><dt>Verification time</dt><dd>{_h(_utc(generated))}</dd><dt>Plugin version</dt><dd>{_h(_plugin_version())}</dd><dt>Git commit</dt><dd>{_h(_git_commit())}</dd><dt>Times</dt><dd>All report times are UTC.</dd></dl></section>
 <section><h2>Checks</h2><table><thead><tr><th>Check</th><th>Polls</th><th>Lifetime failures</th><th>Raw changes</th><th>Document changes</th><th>Unanchored</th><th>Latest poll (UTC)</th></tr></thead><tbody>{''.join(checks)}</tbody></table></section>
 <section><h2>Integrity findings</h2><ul>{finding_rows}</ul></section>
@@ -537,9 +719,17 @@ def write(store, output, config_path=None, archive_label="Evidence archive"):
         for dirname in ("assets", "changes", "responses", "anchors"):
             (temporary / dirname).mkdir()
         (temporary / "assets" / "report.css").write_text(CSS, encoding="utf-8")
+        (temporary / "assets" / "theme.js").write_text(THEME_JS, encoding="utf-8")
         configs = _configs(config_path)
-        index = _render_index(store, temporary, configs, archive_label)
+        generated = _now()
+        index = _render_index(store, temporary, configs, archive_label, generated)
         (temporary / "index.html").write_text(index, encoding="utf-8")
+        manifest = _publication_manifest(
+            store, temporary, generated, _verification_result(store))
+        (temporary / "publication-manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2,
+                       sort_keys=True) + "\n", encoding="utf-8")
+        validate_report(temporary)
         if backup.exists():
             shutil.rmtree(backup)
         if output.exists():
