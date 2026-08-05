@@ -2,7 +2,10 @@
 
 import gzip
 import hashlib
+import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import click
@@ -94,7 +97,7 @@ def test_static_directory_escapes_content_and_uses_only_local_assets(tmp_path):
     assert (output / "assets" / "report.css").is_file()
     assert "Check &lt;unsafe&gt;" in html
     assert "Check <unsafe>" not in html
-    assert "script src=" not in html
+    assert '<script src="assets/theme.js"></script>' in html
     assert "https://" not in html
     assert str(tmp_path) not in html
 
@@ -321,3 +324,201 @@ def test_recent_polls_store_query_is_newest_first_and_bounded(tmp_path):
     for value in range(4):
         store.record_poll("check", content=str(value))
     assert [row["id"] for row in store.recent_polls(limit=2)] == [4, 3]
+
+
+def test_every_html_page_has_accessible_theme_selector_and_correct_assets(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    _observe(store, "Check", b"one", "one")
+    second, _ = _observe(store, "Check", b"two", "two")
+    output, index = _generate(tmp_path, store, _config(tmp_path))
+    detail = _detail(output, second.poll_id)
+
+    for html in (index, detail):
+        assert '<label for="theme-select">Theme</label>' in html
+        assert 'id="theme-select" data-theme-selector' in html
+        assert '<option value="system">System default</option>' in html
+        assert '<option value="light">Light</option>' in html
+        assert '<option value="dark">Dark</option>' in html
+    assert 'src="assets/theme.js"' in index
+    assert 'href="assets/report.css"' in index
+    assert 'src="../assets/theme.js"' in detail
+    assert 'href="../assets/report.css"' in detail
+
+
+def test_csp_allows_only_local_external_script_and_has_no_inline_handlers(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    _observe(store, "Check", b"one", "one")
+    output, html = _generate(tmp_path, store)
+
+    assert "script-src 'self'" in html
+    assert "'unsafe-inline'" not in html
+    assert "'unsafe-eval'" not in html
+    assert "<script>" not in html
+    assert "onclick=" not in html and "onchange=" not in html
+    assert html.count("<script ") == 1
+    assert (output / "assets" / "theme.js").is_file()
+
+
+def _run_theme_script(tmp_path, stored="system", read_fails=False,
+                      write_fails=False, change=None):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is unavailable for the dependency-free theme-script test")
+    script_path = tmp_path / "theme.js"
+    script_path.write_text(report.THEME_JS, encoding="utf-8")
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const options = JSON.parse(process.argv[1]);
+const attributes = {};
+const selectors = [makeSelector(), makeSelector()];
+let ready;
+let saved = options.stored;
+function makeSelector() {
+  return {value: '', listener: null, addEventListener: function (name, fn) { this.listener = fn; }};
+}
+global.window = {localStorage: {
+  getItem: function () { if (options.readFails) throw new Error('read denied'); return saved; },
+  setItem: function (_key, value) { if (options.writeFails) throw new Error('write denied'); saved = value; }
+}};
+global.document = {
+  documentElement: {
+    setAttribute: function (key, value) { attributes[key] = value; },
+    removeAttribute: function (key) { delete attributes[key]; }
+  },
+  querySelectorAll: function () { return selectors; },
+  addEventListener: function (name, fn) { if (name === 'DOMContentLoaded') ready = fn; }
+};
+vm.runInThisContext(fs.readFileSync(process.argv[2], 'utf8'));
+ready();
+if (options.change) selectors[0].listener({target: {value: options.change}});
+process.stdout.write(JSON.stringify({theme: attributes['data-theme'] || null,
+  selectors: selectors.map(x => x.value), saved: saved}));
+"""
+    completed = subprocess.run(
+        [node, "-e", harness, json.dumps({
+            "stored": stored, "readFails": read_fails,
+            "writeFails": write_fails, "change": change,
+        }), str(script_path)], capture_output=True, text=True, check=True)
+    return json.loads(completed.stdout)
+
+
+@pytest.mark.parametrize(("stored", "expected"), [
+    ("system", None), ("light", "light"), ("dark", "dark"),
+    ("unexpected", None), ("<script>", None), (None, None),
+])
+def test_theme_script_accepts_only_supported_stored_values(tmp_path, stored, expected):
+    state = _run_theme_script(tmp_path, stored=stored)
+    assert state["theme"] == expected
+    assert state["selectors"] == [expected or "system"] * 2
+
+
+def test_theme_script_survives_storage_read_failure(tmp_path):
+    state = _run_theme_script(tmp_path, stored="dark", read_fails=True)
+    assert state["theme"] is None
+    assert state["selectors"] == ["system", "system"]
+
+
+@pytest.mark.parametrize(("choice", "expected"), [
+    ("light", "light"), ("dark", "dark"), ("system", None),
+])
+def test_theme_choice_updates_root_all_selectors_and_survives_write_failure(
+        tmp_path, choice, expected):
+    state = _run_theme_script(
+        tmp_path, stored="system", write_fails=True, change=choice)
+    assert state["theme"] == expected
+    assert state["selectors"] == [choice, choice]
+
+
+def test_css_has_explicit_palettes_focus_diff_text_and_light_print(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    _observe(store, "Check", b"before", "before")
+    second, _ = _observe(store, "Check", b"after", "after")
+    output, _html = _generate(tmp_path, store, _config(tmp_path))
+    css = (output / "assets" / "report.css").read_text(encoding="utf-8")
+    detail = _detail(output, second.poll_id)
+
+    for variable in ("--page-background", "--panel-background", "--text-primary",
+                     "--text-muted", "--border", "--link", "--link-visited",
+                     "--success", "--warning", "--failure", "--code-background",
+                     "--diff-added-background", "--diff-added-text",
+                     "--diff-removed-background", "--diff-removed-text", "--focus-ring"):
+        assert variable in css
+    assert ':root[data-theme="dark"]' in css
+    assert "prefers-color-scheme:dark" in css
+    assert "@media print" in css and "color-scheme:light" in css
+    assert ":focus-visible" in css
+    assert "- before" in detail and "+ after" in detail
+
+
+def test_publication_manifest_is_safe_derived_build_metadata(tmp_path, monkeypatch):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    _observe(store, "Check", b"one", "one")
+    _observe(store, "Check", b"two", "two")
+    monkeypatch.setattr(report, "_now", lambda: "2026-08-05T12:00:00+00:00")
+    output, _ = _generate(tmp_path, store, _config(tmp_path))
+    manifest = json.loads((output / "publication-manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["schema_version"] == 1
+    assert manifest["report_kind"] == "derived-evidence-archive-report"
+    assert manifest["verification_result"] == "verified"
+    assert manifest["poll_count"] == 2
+    assert manifest["target_count"] == 1
+    assert manifest["published_change_page_count"] == 1
+    assert manifest["published_response_count"] == 2
+    encoded = json.dumps(manifest)
+    assert str(tmp_path) not in encoded
+    assert "/home/" not in encoded and "file://" not in encoded
+    assert "Check" not in encoded
+
+
+def test_validator_checks_all_local_targets_fragments_and_machine_paths(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    _observe(store, "Check", b"one", "one")
+    output, _ = _generate(tmp_path, store)
+    result = report.validate_report(output)
+    assert result["html_pages"] == 1
+    assert result["references_checked"] >= 3
+
+    (output / "index.html").write_text(
+        '<html><body><a href="missing.html">missing</a></body></html>', encoding="utf-8")
+    with pytest.raises(ValueError, match="missing target"):
+        report.validate_report(output)
+    (output / "index.html").write_text(
+        '<html><body><p>/home/developer/private</p></body></html>', encoding="utf-8")
+    with pytest.raises(ValueError, match="development-machine path"):
+        report.validate_report(output)
+
+
+def test_all_raw_download_links_are_inert_and_resolve(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    attack = b"<html><script>alert(1)</script></html>"
+    _observe(store, "Check", attack, attack.decode())
+    second, _ = _observe(store, "Check", b"safe", "safe")
+    output, _ = _generate(tmp_path, store, _config(tmp_path, rules=[{"changes": "verbose"}]))
+    detail = _detail(output, second.poll_id)
+
+    assert detail.count(" download ") >= 2
+    for path in (output / "responses").iterdir():
+        assert path.suffix == ".txt"
+        assert path.is_file()
+    assert "<script>alert" not in detail
+
+
+def test_theme_and_publication_files_do_not_modify_archive_or_verification(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    _observe(store, "Check", "£1 — before".encode(), "£1 — before")
+    _observe(store, "Check", "£2 — after".encode(), "£2 — after")
+    before_files = {p: (p.stat().st_mtime_ns, p.read_bytes())
+                    for p in Path(store.root).rglob("*") if p.is_file()}
+    before_heads = (store.combined_head("Check"), report._verification_result(store))
+    output, html = _generate(tmp_path, store, _config(tmp_path))
+    after_files = {p: (p.stat().st_mtime_ns, p.read_bytes())
+                   for p in Path(store.root).rglob("*") if p.is_file()}
+
+    assert before_files == after_files
+    assert before_heads == (store.combined_head("Check"), report._verification_result(store))
+    detail = _detail(output, 2)
+    assert "£" in detail and "—" in detail
+    assert "Â£" not in html + detail and "â€”" not in html + detail
+    assert report.validate_report(output)["html_pages"] == 2
