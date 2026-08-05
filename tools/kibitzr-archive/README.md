@@ -216,11 +216,34 @@ kibitzr archive report --root archive --output report
 
 Open `report/index.html`. The directory contains the dashboard, one page per
 document change, inert `.txt` copies of referenced raw responses, local CSS,
-and copies of applicable manifests and proofs. It loads no scripts, fonts,
-analytics or styles from the internet. Generation happens in a temporary
+one small local theme script, a publication-build manifest, and copies of
+applicable manifests and proofs. It loads no libraries, fonts, analytics or
+assets from the internet. Generation happens in a temporary
 sibling directory; the previous complete report is replaced only after the
 new one has been written successfully. Report output must be outside the
 archive root.
+
+The report is a **directory artifact**. Copy, upload or ZIP the entire `report/`
+directory. `index.html` alone will be missing its stylesheet, theme behavior,
+change pages, raw downloads, anchor copies and publication manifest. The
+generator validates every local HTML `href` and `src` before replacing a
+previous report, and refuses missing targets, paths escaping the report, or
+accidental `/home/...`, `C:\Users\...` or `file://...` disclosure.
+
+### Theme preference
+
+Every HTML page has a labelled native **Theme** selector with exactly three
+choices: **System default**, **Light**, and **Dark**. System default follows the
+browser's `prefers-color-scheme`; the explicit palettes set `data-theme` on the
+document root. The choice is stored only in browser `localStorage` under
+`evidence-archive-report-theme`, carries between report pages, and sends
+nothing over the network. Invalid values become System default, and blocked or
+unavailable storage does not prevent switching the current page.
+
+The script is a small local `assets/theme.js` file. There is no inline script,
+external dependency, cookie, analytics, or network request. Without JavaScript
+the report remains readable and follows the operating-system theme. Printing
+always uses a light, high-contrast palette regardless of the screen choice.
 
 The dashboard distinguishes four events that used to be easy to conflate:
 
@@ -265,6 +288,12 @@ the commands printed in it to verify the source archive and OpenTimestamps
 proofs. Regenerating a report neither adds evidence nor repairs missing
 evidence.
 
+`publication-manifest.json` is similarly derived. It records generator
+provenance, the verification result and time observed during generation, and
+aggregate publication counts. It contains no target names or local paths. It
+does not replace the authoritative archive manifests, chain or blob checks, or
+independent OpenTimestamps/Bitcoin verification.
+
 By default the report uses the neutral label “Evidence archive” and does not
 print the archive's absolute path. `--archive-label` can set a public title.
 `--config /path/to/kibitzr.yml` selects the current rules explicitly; without
@@ -277,6 +306,9 @@ been reviewed.
 > details; and watched-target names can reveal investigative intent. Creating
 > a local report is not consent to publish it. Public publication must be an
 > explicit, separately reviewed choice.
+
+For the intended private-collector → reviewed static export → public-host
+boundary, see [the publication architecture](../../docs/PUBLICATION_ARCHITECTURE.md).
 
 ## The hash chain
 

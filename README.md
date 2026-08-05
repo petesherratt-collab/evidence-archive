@@ -89,9 +89,13 @@ kibitzr archive report --root archive --output report
 The report reads the archive without modifying it. It separates raw response
 changes from selected-document changes and links hash-verified changes to
 before/after evidence pages. It works offline and makes no requests to
-third-party services. Run the command again whenever you want to refresh the
-display. See the plugin README for reconstruction limits and the publication
-privacy warning.
+third-party services. Its System/Light/Dark preference is stored only in the
+browser and degrades to the operating-system theme without JavaScript. Copy or
+upload the complete generated directory, not only `index.html`. Run the command
+again whenever you want to refresh the display. See the plugin README for
+reconstruction limits and the publication privacy warning, and
+[`docs/PUBLICATION_ARCHITECTURE.md`](docs/PUBLICATION_ARCHITECTURE.md) for the
+future static-host boundary.
 
 The current suite contains 173 tests, including forged-archive and tamper cases,
 and passes on Python 3.13.3:
