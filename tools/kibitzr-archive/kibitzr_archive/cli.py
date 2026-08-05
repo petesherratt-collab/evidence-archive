@@ -216,14 +216,22 @@ def extend_cli(group):
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
-    @click.option("--output", default="archive-dashboard.html", show_default=True,
-                  help="HTML file to write")
-    def report(root, output):
-        """Write a self-contained HTML dashboard of the current archive"""
+    @click.option("--output", default="report", show_default=True,
+                  help="Static report directory to write")
+    @click.option("--config", "config_path", type=click.Path(exists=True),
+                  help="kibitzr.yml used to reproduce current transforms")
+    @click.option("--archive-label", default="Evidence archive", show_default=True,
+                  help="Neutral public label for this archive")
+    def report(root, output, config_path, archive_label):
+        """Write a static, hash-backed evidence browser"""
         from .report import write  # noqa: PLC0415
 
-        path = write(_open(root), output)
-        click.echo(f"Dashboard written to {path}")
+        try:
+            path = write(_open(root), output, config_path=config_path,
+                         archive_label=archive_label)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Evidence browser written to {path / 'index.html'}")
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
