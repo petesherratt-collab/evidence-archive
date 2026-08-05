@@ -76,7 +76,19 @@ kibitzr archive fsck         # check blobs, manifests, proofs and backup heads
 kibitzr archive gaps         # compare observed polls with declared schedules
 kibitzr archive anchors      # proofs taken and polls not yet covered
 kibitzr archive calibration  # measure control-target observation lag
+kibitzr archive report       # write a self-contained HTML dashboard
 ```
+
+For a browser-friendly view, run this from the collection root and open the
+resulting file:
+
+```sh
+kibitzr archive report --output archive-dashboard.html
+```
+
+The report reads the archive without modifying it and embeds all styling in the
+HTML, so it works offline and makes no requests to third-party services. Run the
+command again whenever you want to refresh the display.
 
 The current suite contains 173 tests, including forged-archive and tamper cases,
 and passes on Python 3.13.3:

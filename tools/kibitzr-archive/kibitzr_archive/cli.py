@@ -12,6 +12,7 @@
     kibitzr archive anchor-upgrade  calendar attestation -> Bitcoin attestation
     kibitzr archive anchor-verify   check a proof still holds
     kibitzr archive calibration     measured lag between change and observation
+    kibitzr archive report          write a self-contained HTML dashboard
 """
 import json
 import os
@@ -212,6 +213,17 @@ def extend_cli(group):
                        "chain, or ran before this feature existed):")
             for name in unarchived:
                 click.echo(f"  - {name}")
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--output", default="archive-dashboard.html", show_default=True,
+                  help="HTML file to write")
+    def report(root, output):
+        """Write a self-contained HTML dashboard of the current archive"""
+        from .report import write  # noqa: PLC0415
+
+        path = write(_open(root), output)
+        click.echo(f"Dashboard written to {path}")
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
