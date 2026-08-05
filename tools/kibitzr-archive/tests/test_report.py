@@ -488,6 +488,11 @@ def test_validator_checks_all_local_targets_fragments_and_machine_paths(tmp_path
         '<html><body><p>/home/developer/private</p></body></html>', encoding="utf-8")
     with pytest.raises(ValueError, match="development-machine path"):
         report.validate_report(output)
+    (output / "index.html").write_text(
+        '<html><body><script src="https://cdn.invalid/theme.js"></script></body></html>',
+        encoding="utf-8")
+    with pytest.raises(ValueError, match="remote asset"):
+        report.validate_report(output)
 
 
 def test_all_raw_download_links_are_inert_and_resolve(tmp_path):

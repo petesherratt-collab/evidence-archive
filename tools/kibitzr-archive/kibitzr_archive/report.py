@@ -242,6 +242,9 @@ def validate_report(root):
         for _tag, _attribute, reference in parser.references:
             split = urlsplit(reference)
             if split.scheme or split.netloc:
+                if _attribute == "src" or _tag == "link":
+                    failures.append(
+                        f"{page.relative_to(root)} has remote asset: {reference}")
                 continue
             if not split.path:
                 target = page
