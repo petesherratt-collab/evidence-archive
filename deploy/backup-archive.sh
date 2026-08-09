@@ -82,7 +82,11 @@ esac
 # destination itself; for a remote it is scratch space on this machine, because
 # verification has to happen against real local files.
 if [ -n "$REMOTE" ]; then
-    STAGE_PARENT="${BACKUP_STAGE_DIR:-${TMPDIR:-/tmp}}"
+    [ -n "${BACKUP_STAGE_DIR:-}" ] || {
+        echo "Remote backup requires explicit BACKUP_STAGE_DIR; refusing /tmp fallback." >&2
+        exit 1
+    }
+    STAGE_PARENT="$BACKUP_STAGE_DIR"
 else
     STAGE_PARENT="$DEST_PARENT"
 fi

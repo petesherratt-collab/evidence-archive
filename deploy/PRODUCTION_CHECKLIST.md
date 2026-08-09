@@ -2,6 +2,7 @@
 
 - [ ] OS updated
 - [ ] Time synchronisation working
+- [ ] User lingering enabled and tested across logout/reboot
 - [ ] Storage health and capacity checked
 - [ ] Repository cloned at intended tag or commit
 - [ ] Dependency versions verified against release lock
@@ -17,7 +18,7 @@
 - [ ] Anchor-upgrade timer enabled
 - [ ] Backup timer enabled
 - [ ] Health mechanism enabled
+- [ ] Deliberate health failure delivered an outbound alert
 - [ ] First real polls inspected
 - [ ] First backup restored and independently verified
 - [ ] Old collector and timers confirmed disabled
-

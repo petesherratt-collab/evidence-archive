@@ -63,6 +63,15 @@ if [ -n "${EVIDENCE_BACKUP_DEST:-}" ]; then
   esac
 else bad BACKUP "EVIDENCE_BACKUP_DEST is unset"; fi
 
+if [ -n "${BACKUP_STAGE_DIR:-}" ] && [ -d "$BACKUP_STAGE_DIR" ] && [ -w "$BACKUP_STAGE_DIR" ]; then
+  stage_fs=$(findmnt -n -o FSTYPE --target "$BACKUP_STAGE_DIR" 2>/dev/null || true)
+  [ "$stage_fs" != tmpfs ] && [ "$stage_fs" != ramfs ] && ok BACKUP_STAGE "$BACKUP_STAGE_DIR ($stage_fs)" || bad BACKUP_STAGE "must not use volatile RAM storage"
+else bad BACKUP_STAGE "explicit writable BACKUP_STAGE_DIR is required"; fi
+
+linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)
+[ "$linger" = yes ] && ok LINGER || bad LINGER "run loginctl enable-linger $USER"
+[ -n "${EVIDENCE_ALERT_URL:-}" ] && ok ALERT "configured; delivery requires smoke test" || bad ALERT "EVIDENCE_ALERT_URL is unset"
+
 pgrep -af 'kibitzr (run|once)' >/dev/null 2>&1 && bad COLLECTOR "another collector appears to be running" || ok COLLECTOR "none detected"
 if [ -n "$REPO" ]; then
   systemd-analyze verify "$REPO"/deploy/*.service "$REPO"/deploy/*.timer >/dev/null 2>&1 && ok SYSTEMD || bad SYSTEMD "unit verification failed"
@@ -70,5 +79,6 @@ fi
 if [ -f "${ARCHIVE:-/nonexistent}/polls.db" ] && [ -x "${kb:-/nonexistent}" ]; then
   "$kb" archive verify --root "$ARCHIVE" >/dev/null && ok VERIFY || bad VERIFY "archive verify failed"
   "$kb" archive fsck --root "$ARCHIVE" >/dev/null && ok FSCK || bad FSCK "archive fsck failed"
+  "$REPO/deploy/health-check.sh" >/dev/null && ok HEALTH || bad HEALTH "publisher/collector freshness check failed"
 else skip ARCHIVE "no existing archive"; fi
 exit "$fail"

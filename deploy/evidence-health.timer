@@ -1,0 +1,11 @@
+[Unit]
+Description=Run evidence archive health checks
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

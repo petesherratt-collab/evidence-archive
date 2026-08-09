@@ -11,6 +11,10 @@
    first poll creates its database and blob layout.
 5. Set `EVIDENCE_BACKUP_DEST` to a writable local path or an rclone destination.
    Configure rclone interactively with a least-privilege, non-delete credential.
+6. Set `BACKUP_STAGE_DIR` to a writable persistent filesystem with room for at
+   least 120% of the archive. Remote backups fail closed without it.
+7. Set `EVIDENCE_ALERT_URL` to the host-private HTTPS webhook that receives
+   health failures; do not commit its credential-bearing URL.
 
 Application configuration is the reviewed target YAML: URLs, selectors,
 transforms and periods. Host configuration is paths, backup destination,

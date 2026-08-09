@@ -1,7 +1,7 @@
 # Install on a clean Linux collector
 
-Supported baseline: a maintained Debian/Ubuntu-family Linux with systemd user
-services, Python 3.9 or newer, Git, curl, jq, CA certificates, SQLite, and at
+Tested production baseline: a maintained Debian/Ubuntu-family Linux with
+systemd user services, Python 3.13, Git, curl, jq, CA certificates, SQLite, and at
 least 1 GiB free beyond the estimated archive and backup staging size.
 
 ```sh
@@ -16,6 +16,8 @@ python3 -m venv "$HOME/evidence-collection/.venv"
 "$HOME/evidence-collection/.venv/bin/pip" install ./tools/kibitzr-archive
 python3 -m venv "$HOME/evidence-collection/.venv-anchor"
 "$HOME/evidence-collection/.venv-anchor/bin/pip" install opentimestamps-client==0.7.2
+loginctl enable-linger "$USER"
+test "$(loginctl show-user "$USER" -p Linger --value)" = yes
 ```
 
 The run root contains `kibitzr.yml`, `.venv/`, `.venv-anchor/`, and `archive/`;

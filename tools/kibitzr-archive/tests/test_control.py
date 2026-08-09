@@ -1,10 +1,9 @@
 """Control checks: tagging, stall detection, and observation-lag calibration.
 
-A control is a page known to change faster than it is polled. Its value is
-entirely in the inversion it creates: for every other check a long run of
-unchanged polls is the finding, and for this one it is the alarm. These tests
-pin that inversion down, because getting it backwards would produce an archive
-that looks healthiest exactly when it has stopped working.
+A control is a page intended to change independently of the collector. Its
+publisher cadence is not guaranteed, so an unchanged run is an alarm to
+classify rather than proof of collector failure. These tests pin down the
+archive-side stall signal; deployment health also checks publisher freshness.
 """
 import gzip
 

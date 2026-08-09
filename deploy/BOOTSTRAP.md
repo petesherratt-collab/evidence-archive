@@ -12,10 +12,12 @@ Perform in order and stop on any failure:
 7. Copy `deploy/*.service` and `deploy/*.timer` to
    `~/.config/systemd/user/`; run `systemd-analyze verify` and
    `systemctl --user daemon-reload`.
+   Run `loginctl enable-linger "$USER"` and verify `Linger=yes` before relying
+   on user units without an interactive login.
 8. Start the collector without enabling it; inspect journal and archive growth.
 9. Start one anchor and verify a proof exists (pending is expected initially).
 10. Run one backup, restore it elsewhere, and independently verify/fsck it.
-11. Only then enable collector, anchor, upgrade, backup and health mechanisms.
+11. Send a test alert, then enable collector, anchor, upgrade, backup and health
+    mechanisms. Confirm a deliberately failed health check produces an alert.
 12. Re-run preflight, inspect first real polls, and record version, host and
     regime transition as an append-only annotation where appropriate.
-

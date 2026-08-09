@@ -70,7 +70,8 @@ FETCH_SEMANTICS_NOTES = {
         "transient fetch errors are now retried before being recorded as "
         "failures, so failure counts are not comparable across this point"),
     3: ("fetch path hardened: the response cache was removed so every poll "
-        "reaches the origin, redirects are followed one vetted hop at a time, "
+        "performs a network fetch (an intermediary may still serve it), "
+        "redirects are followed one vetted hop at a time, "
         "connections are pinned to the addresses that were vetted, and the "
         "fetch is bounded by size and wall-clock deadline. A poll that would "
         "previously have been answered from cache, followed off-origin, or "

@@ -87,13 +87,15 @@ replaces it, because several of the stock behaviours would let the archive
 record something that is not true. Each is a statement the record makes on
 your behalf, so each is listed here rather than left to the source.
 
-- **Every poll reaches the origin.** kibitzr wraps its session in
+- **Every poll performs a network fetch.** kibitzr wraps its session in
   `CacheControl`, and the fetcher is constructed once per check and lives for
   the process. A target serving a long `max-age` would have its polls answered
   from an in-memory cache, and those polls would enter the log as observations
   indistinguishable from genuinely unchanged ones — collapsing the exact
   distinction this archive exists to keep. The cache is removed and
-  `Cache-Control: no-cache, no-store` sent, which covers intermediaries too.
+  `Cache-Control: no-cache, no-store` is sent. This prevents Kibitzr's local
+  cache from answering; it does not prove that a CDN or reverse proxy did not
+  serve the representation.
 - **Redirects are followed one vetted hop at a time.** requests follows them
   internally, which would put every hop after the first outside any check. A
   cross-origin redirect is refused by default: the poll row records the

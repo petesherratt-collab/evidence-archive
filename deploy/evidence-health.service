@@ -1,0 +1,9 @@
+[Unit]
+Description=Evidence archive health check
+OnFailure=evidence-alert.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/evidence-archive/environment
+ExecStart=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/health-check.sh"'
+
