@@ -14,10 +14,9 @@ StartLimitBurst=5
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/peters/evidence-collection
-ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh a.pool.opentimestamps.org 120
-ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr archive anchor-upgrade
-Environment=KIBITZR_ARCHIVE_OTS=/home/peters/evidence-collection/.venv-anchor/bin/ots
+EnvironmentFile=%h/.config/evidence-archive/environment
+ExecStartPre=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh" a.pool.opentimestamps.org 120'
+ExecStart=/usr/bin/env bash -c 'exec "$EVIDENCE_ROOT/.venv/bin/kibitzr" archive anchor-upgrade --root "$EVIDENCE_ARCHIVE" --ots "$EVIDENCE_ROOT/.venv-anchor/bin/ots"'
 
 # Retry rather than waiting for the next hourly slot. Upgrading is idempotent,
 # so a retry that turns out to be premature is a no-op.

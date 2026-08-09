@@ -14,11 +14,10 @@ StartLimitBurst=5
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/peters/evidence-collection
+EnvironmentFile=%h/.config/evidence-archive/environment
 # The CLI resolves `archive/` relative to the working directory.
-ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh a.pool.opentimestamps.org 120
-ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr archive anchor
-Environment=KIBITZR_ARCHIVE_OTS=/home/peters/evidence-collection/.venv-anchor/bin/ots
+ExecStartPre=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh" a.pool.opentimestamps.org 120'
+ExecStart=/usr/bin/env bash -c 'exec "$EVIDENCE_ROOT/.venv/bin/kibitzr" archive anchor --root "$EVIDENCE_ARCHIVE" --ots "$EVIDENCE_ROOT/.venv-anchor/bin/ots"'
 
 # Retry a failed run rather than waiting a day for the next one. Anchoring is
 # the step whose loss is unrecoverable — nothing can retroactively prove that

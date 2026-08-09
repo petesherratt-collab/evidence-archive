@@ -1,0 +1,5 @@
+# Regenerate deliberately for a release; production installs must use hashes or
+# an artefact mirror before this is treated as a supply-chain lock.
+kibitzr==8.0.0
+opentimestamps-client==0.7.2
+

@@ -8,17 +8,15 @@ Documentation=https://github.com/petesherratt-collab/evidence-archive
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/peters/evidence-collection
+EnvironmentFile=%h/.config/evidence-archive/environment
 # Destination is an rclone remote. Change it here rather than in the script,
 # which takes it as an argument precisely so the unit owns the policy.
-ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh api.backblazeb2.com 120
-ExecStart=/home/peters/evidence-collection/repo/deploy/backup-archive.sh b2:petesherratt-evidence-archive/laptop
-Environment=RCLONE=/home/peters/.local/bin/rclone
+ExecStartPre=/usr/bin/env bash -c 'test -n "$EVIDENCE_BACKUP_DEST" && exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh" api.backblazeb2.com 120'
+ExecStart=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/backup-archive.sh" "$EVIDENCE_BACKUP_DEST" "$EVIDENCE_ROOT"'
 
 # The copy is staged and verified here before being uploaded. Not /tmp: a
 # tmpfs /tmp would put the staging copy in RAM, and while 4MB is harmless
 # today the archive only grows.
-Environment=BACKUP_STAGE_DIR=/home/peters/evidence-collection/.backup-stage
 
 # Never allowed to disturb collection. A failed backup leaves the archive
 # exactly as it was — the source is only ever read.

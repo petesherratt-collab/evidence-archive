@@ -52,7 +52,7 @@
 # and anything else — including a polls.db swapped for an older one — is caught
 # by `fsck` on restore, which is what the chains and anchors were built for.
 #
-# Usage:  backup-archive.sh /media/peters/DRIVE   [/path/to/run-root]
+# Usage:  backup-archive.sh /media/operator/DRIVE [/path/to/run-root]
 #         backup-archive.sh b2:bucket/evidence    [/path/to/run-root]
 set -euo pipefail
 
