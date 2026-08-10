@@ -154,7 +154,8 @@ HEADS_END="$("$PYTHON" -c 'from kibitzr_archive import integrity; print(integrit
 # reporting success would be the same silent failure one step earlier.
 echo "== Checking the source archive before copying it"
 "$KIBITZR" archive verify --root "$SOURCE" || die "The SOURCE archive fails verify."
-"$KIBITZR" archive fsck   --root "$SOURCE" || die "The SOURCE archive fails fsck."
+"$KIBITZR" archive fsck --strict --root "$SOURCE" || \
+    die "The SOURCE archive has damage or unresolved suspect findings."
 
 echo ""
 echo "== Copying to $STAGING"
@@ -180,6 +181,18 @@ cp -a "$SOURCE/blobs" "$STAGING/"
 if [ -d "$SOURCE/anchors" ]; then
     cp -a "$SOURCE/anchors" "$STAGING/"
 fi
+# Append-only reconciliation evidence and the pre-reconciliation safety image
+# are part of this archive's history even though the active verifier does not
+# reference them. Migration must not silently narrow "the archive" to only the
+# files needed for a green fsck.
+if [ -d "$SOURCE/failed-anchor-attempts" ]; then
+    cp -a "$SOURCE/failed-anchor-attempts" "$STAGING/"
+fi
+for safety_db in "$SOURCE"/polls.db.pre-*; do
+    if [ -f "$safety_db" ]; then
+        cp -a "$safety_db" "$STAGING/"
+    fi
+done
 
 cat > "$STAGING/BACKUP.txt" <<EOF
 Evidence archive backup
@@ -223,7 +236,8 @@ sync -f "$STAGING/polls.db" 2>/dev/null || sync
 echo ""
 echo "== Verifying the copy"
 "$KIBITZR" archive verify --root "$STAGING" || die "The COPY fails verify."
-"$KIBITZR" archive fsck   --root "$STAGING" || die "The COPY fails fsck."
+"$KIBITZR" archive fsck --strict --root "$STAGING" || \
+    die "The COPY has damage or unresolved suspect findings."
 
 mv "$STAGING" "$FINAL"
 sync -f "$FINAL/polls.db" 2>/dev/null || sync

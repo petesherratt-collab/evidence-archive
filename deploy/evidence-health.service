@@ -6,4 +6,5 @@ OnFailure=evidence-alert.service
 Type=oneshot
 EnvironmentFile=%h/.config/evidence-archive/environment
 ExecStart=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/health-check.sh"'
-
+Nice=10
+IOSchedulingClass=idle

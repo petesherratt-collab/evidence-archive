@@ -290,7 +290,9 @@ def extend_cli(group):
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
     @click.option("--quiet", is_flag=True,
                   help="Print only findings and the verdict")
-    def fsck(root, quiet):
+    @click.option("--strict", is_flag=True,
+                  help="Exit non-zero for suspect findings as well as damage")
+    def fsck(root, quiet, strict):
         """Blobs and proofs are present and match — what verify cannot see"""
         store = _open(root)
         findings, counts = integrity.check(store)
@@ -315,6 +317,14 @@ def extend_cli(group):
                 err=True,
             )
             sys.exit(1)
+
+        suspect = [f for f in findings if f.severity == integrity.SUSPECT]
+        if strict and suspect:
+            click.echo(
+                f"\n{len(suspect)} suspect finding(s). Strict mode requires "
+                f"a finding-free archive.", err=True,
+            )
+            sys.exit(2)
 
         # Said explicitly because the whole point of this command is that
         # "verify passed" was never the same statement as "nothing is missing".

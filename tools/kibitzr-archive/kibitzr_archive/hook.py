@@ -205,11 +205,23 @@ def before_start(app, checkers):  # noqa: ARG001 - signature fixed by kibitzr
     # store and its sqlite connection at kibitzr import time.
     from .promoter import archive_root, get_store  # noqa: PLC0415
 
+    import os  # noqa: PLC0415
+    import socket  # noqa: PLC0415
+
     installed = 0
+    identified_stores = set()
     for checker in checkers:
         if not checker.conf.get("archive"):
             continue
         store = get_store(archive_root(checker.conf))
+        if store.root not in identified_stores:
+            instance_id = os.environ.get("EVIDENCE_COLLECTOR_INSTANCE_ID")
+            if instance_id:
+                if store.declare_collector_instance(instance_id, socket.gethostname()):
+                    logger.info("Recorded collector instance %r", instance_id)
+            else:
+                logger.warning("EVIDENCE_COLLECTOR_INSTANCE_ID is unset; collector transition is not recorded")
+            identified_stores.add(store.root)
         if install(checker, store):
             installed += 1
         try:

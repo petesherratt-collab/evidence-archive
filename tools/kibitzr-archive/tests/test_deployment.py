@@ -42,6 +42,14 @@ def test_health_parser_requires_machine_readable_time(health_module):
 
 def test_health_parser_reads_utc_time(health_module):
     value = health_module.body_time(
-        b'<time datetime="2026-08-09T12:00:00Z">tick</time>'
+        b'<span id="generated"><time datetime="2026-08-09T12:00:00Z">tick</time></span>'
     )
     assert value.tzinfo == timezone.utc
+
+
+def test_health_parser_ignores_unrelated_datetime(health_module):
+    value = health_module.body_time(
+        b'<time datetime="2000-01-01T00:00:00Z">other</time>'
+        b'<span id="generated"><time datetime="2026-08-09T12:00:00Z">tick</time></span>'
+    )
+    assert value.year == 2026

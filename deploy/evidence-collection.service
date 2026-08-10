@@ -25,7 +25,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/evidence-archive/environment
-ExecStartPre=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh"'
+ExecStartPre=/usr/bin/env bash -c 'test -n "$EVIDENCE_READINESS_HOST" && exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh" "$EVIDENCE_READINESS_HOST"'
 # The readiness helper has a 120-second ceiling. systemd's default start
 # timeout is commonly 90 seconds, which killed the helper before its own
 # bounded policy completed on 5 Aug 2026. Leave enough room for the helper to

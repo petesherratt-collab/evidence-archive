@@ -12,8 +12,9 @@
    through enablement, lingering sessions, cron, containers or supervisor jobs.
 9. Start exactly one new collector. If the annotation command/policy is
    available, append a factual host/regime transition without changing history.
+   Set a new stable `EVIDENCE_COLLECTOR_INSTANCE_ID`; startup records that
+   transition on the annotation chain.
 10. Verify and inspect the first new polls, then anchor and back up again.
 
 Never overlap collectors. A valid chain on each of two divergent archives does
 not establish a complete authoritative history.
-

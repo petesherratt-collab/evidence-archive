@@ -1,0 +1,11 @@
+[Unit]
+Description=Evidence archive full integrity check
+OnFailure=evidence-alert.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/evidence-archive/environment
+ExecStart=/usr/bin/env bash -c '"$EVIDENCE_ROOT/.venv/bin/kibitzr" archive verify --root "$EVIDENCE_ARCHIVE" && exec "$EVIDENCE_ROOT/.venv/bin/kibitzr" archive fsck --strict --root "$EVIDENCE_ARCHIVE"'
+Nice=10
+IOSchedulingClass=idle
+

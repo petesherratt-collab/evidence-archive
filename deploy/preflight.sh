@@ -65,12 +65,23 @@ else bad BACKUP "EVIDENCE_BACKUP_DEST is unset"; fi
 
 if [ -n "${BACKUP_STAGE_DIR:-}" ] && [ -d "$BACKUP_STAGE_DIR" ] && [ -w "$BACKUP_STAGE_DIR" ]; then
   stage_fs=$(findmnt -n -o FSTYPE --target "$BACKUP_STAGE_DIR" 2>/dev/null || true)
-  [ "$stage_fs" != tmpfs ] && [ "$stage_fs" != ramfs ] && ok BACKUP_STAGE "$BACKUP_STAGE_DIR ($stage_fs)" || bad BACKUP_STAGE "must not use volatile RAM storage"
+  stage_free=$(df -Pk "$BACKUP_STAGE_DIR" | awk 'NR==2 {print $4}')
+  archive_kb=$(du -sk "$ARCHIVE" 2>/dev/null | awk '{print $1}')
+  archive_need=$(( ${archive_kb:-1} * 12 / 10 ))
+  [ "$stage_fs" != tmpfs ] && [ "$stage_fs" != ramfs ] && \
+    [ "${stage_free:-0}" -ge "${archive_need:-1}" ] && \
+    ok BACKUP_STAGE "$BACKUP_STAGE_DIR ($stage_fs; ${stage_free} KiB free)" || \
+    bad BACKUP_STAGE "must be persistent and hold at least 120% of the archive"
 else bad BACKUP_STAGE "explicit writable BACKUP_STAGE_DIR is required"; fi
 
 linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)
 [ "$linger" = yes ] && ok LINGER || bad LINGER "run loginctl enable-linger $USER"
 [ -n "${EVIDENCE_ALERT_URL:-}" ] && ok ALERT "configured; delivery requires smoke test" || bad ALERT "EVIDENCE_ALERT_URL is unset"
+[ -n "${EVIDENCE_COLLECTOR_INSTANCE_ID:-}" ] && ok INSTANCE "$EVIDENCE_COLLECTOR_INSTANCE_ID" || bad INSTANCE "stable EVIDENCE_COLLECTOR_INSTANCE_ID is unset"
+if [ -n "${EVIDENCE_HEARTBEAT_URL:-}" ] && [ -r "${EVIDENCE_HEARTBEAT_TOKEN_FILE:-}" ]; then
+  token_mode=$(stat -c %a "$EVIDENCE_HEARTBEAT_TOKEN_FILE")
+  [ "$token_mode" = 600 ] && ok HEARTBEAT "configured; absence alarm still requires live test" || bad HEARTBEAT "token file mode must be 600"
+else bad HEARTBEAT "URL or readable token file is missing"; fi
 
 pgrep -af 'kibitzr (run|once)' >/dev/null 2>&1 && bad COLLECTOR "another collector appears to be running" || ok COLLECTOR "none detected"
 if [ -n "$REPO" ]; then
@@ -78,7 +89,7 @@ if [ -n "$REPO" ]; then
 fi
 if [ -f "${ARCHIVE:-/nonexistent}/polls.db" ] && [ -x "${kb:-/nonexistent}" ]; then
   "$kb" archive verify --root "$ARCHIVE" >/dev/null && ok VERIFY || bad VERIFY "archive verify failed"
-  "$kb" archive fsck --root "$ARCHIVE" >/dev/null && ok FSCK || bad FSCK "archive fsck failed"
+  "$kb" archive fsck --strict --root "$ARCHIVE" >/dev/null && ok FSCK || bad FSCK "archive fsck found damage or suspect state"
   "$REPO/deploy/health-check.sh" >/dev/null && ok HEALTH || bad HEALTH "publisher/collector freshness check failed"
 else skip ARCHIVE "no existing archive"; fi
 exit "$fail"

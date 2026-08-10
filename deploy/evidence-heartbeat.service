@@ -1,0 +1,9 @@
+[Unit]
+Description=Send off-host evidence collector heartbeat
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/evidence-archive/environment
+ExecStart=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/heartbeat.sh"'
+Nice=10
+

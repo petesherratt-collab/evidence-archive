@@ -5,11 +5,16 @@ import argparse
 import re
 import sys
 import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 
 from kibitzr_archive.store import ArchiveStore
 
-STAMP = re.compile(rb'datetime="([^"]+)"')
+STAMP = re.compile(
+    rb'<span\s+id="generated"[^>]*>\s*<time\s+datetime="([^"]+)"',
+    re.IGNORECASE,
+)
+MAX_CONTROL_BYTES = 1_000_000
 
 
 def instant(value: str) -> datetime:
@@ -34,11 +39,28 @@ def main() -> int:
     now = datetime.now(timezone.utc)
 
     try:
-        request = urllib.request.Request(args.url, headers={"Cache-Control": "no-cache"})
+        parts = urllib.parse.urlsplit(args.url)
+        query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        query.append(("evidence_health_nonce", str(int(now.timestamp()))))
+        fresh_url = urllib.parse.urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, urllib.parse.urlencode(query), parts.fragment)
+        )
+        request = urllib.request.Request(
+            fresh_url, headers={"Cache-Control": "no-cache, no-store"}
+        )
         with urllib.request.urlopen(request, timeout=20) as response:
-            live_generated = body_time(response.read(1_000_001))
+            live_body = response.read(MAX_CONTROL_BYTES + 1)
     except Exception as exc:
         print(f"CONTROL_PUBLISHER_UNREACHABLE: {exc}", file=sys.stderr)
+        return 1
+
+    if len(live_body) > MAX_CONTROL_BYTES:
+        print("CONTROL_PUBLISHER_INVALID: response exceeds 1000000 bytes", file=sys.stderr)
+        return 1
+    try:
+        live_generated = body_time(live_body)
+    except (ValueError, UnicodeError) as exc:
+        print(f"CONTROL_PUBLISHER_INVALID: {exc}", file=sys.stderr)
         return 1
 
     publisher_age = (now - live_generated).total_seconds()
@@ -59,11 +81,7 @@ def main() -> int:
         print(f"COLLECTOR_CONTROL_UNREADABLE: {exc}", file=sys.stderr)
         return 1
 
-    with store._connect() as connection:  # deployment cross-check of linked transform
-        transformed = connection.execute(
-            "SELECT 1 FROM normalisation WHERE poll_id = ?", (latest["id"],)
-        ).fetchone()
-    if not transformed:
+    if not store.poll_has_normalisation(latest["id"]):
         print("COLLECTOR_TRANSFORM_MISSING: latest control poll has no normalisation", file=sys.stderr)
         return 1
 

@@ -18,6 +18,7 @@
 - [ ] Anchor-upgrade timer enabled
 - [ ] Backup timer enabled
 - [ ] Health mechanism enabled
+- [ ] Off-host heartbeat/dead-man alarm enabled and absence tested
 - [ ] Deliberate health failure delivered an outbound alert
 - [ ] First real polls inspected
 - [ ] First backup restored and independently verified

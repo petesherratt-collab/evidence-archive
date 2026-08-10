@@ -785,6 +785,19 @@ class ArchiveStore:
         body.update(detail or {})
         return self.record_annotation("note", body, check_name=check_name)
 
+    def declare_collector_instance(self, instance_id, hostname=None):
+        """Append a collector-host transition when the stable identity changes."""
+        previous = [
+            item for item in self.annotations(kind="note")
+            if item["detail"].get("role") == "collector_instance"
+        ]
+        if previous and previous[-1]["detail"].get("instance_id") == instance_id:
+            return None
+        detail = {"role": "collector_instance", "instance_id": instance_id}
+        if hostname:
+            detail["hostname"] = hostname
+        return self.record_annotation("note", detail)
+
     def control_checks(self):
         """Names of checks asserted to be controls, by note annotation."""
         return {
@@ -837,6 +850,13 @@ class ArchiveStore:
         query += " ORDER BY id"
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, (check_name,))]
+
+    def poll_has_normalisation(self, poll_id):
+        """Whether a transform result is linked to this poll."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT 1 FROM normalisation WHERE poll_id = ?", (poll_id,)
+            ).fetchone() is not None
 
     def recent_polls(self, limit=30):
         """Most recent poll rows across checks, newest first, for reporting."""

@@ -73,6 +73,23 @@ def test_an_ordinary_note_does_not_make_a_check_a_control(store):
     assert store.control_checks() == set()
 
 
+def test_collector_instance_transition_is_append_only(store):
+    first = store.declare_collector_instance("collector-a", "host-a")
+    duplicate = store.declare_collector_instance("collector-a", "host-a")
+    second = store.declare_collector_instance("collector-b", "host-b")
+
+    assert first is not None
+    assert duplicate is None
+    assert second is not None
+    transitions = [
+        row for row in store.annotations(kind="note")
+        if row["detail"].get("role") == "collector_instance"
+    ]
+    assert [row["detail"]["instance_id"] for row in transitions] == [
+        "collector-a", "collector-b"
+    ]
+
+
 # -- stall detection -----------------------------------------------------
 
 def test_a_ticking_control_does_not_stall(store):

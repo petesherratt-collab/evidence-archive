@@ -329,6 +329,20 @@ def test_the_ots_upgrade_backup_file_is_not_a_stray(store, cli):
     assert "unrecorded proof file" not in result.output
 
 
+def test_strict_fsck_fails_on_suspect_findings(store, cli):
+    """Deployment gates can require a finding-free archive explicitly."""
+    with open(os.path.join(store.blob_root, "interrupted.tmp"), "wb") as fp:
+        fp.write(b"partial")
+
+    ordinary = _run(cli, store.root, "fsck")
+    strict = _run(cli, store.root, "fsck", "--strict")
+
+    assert ordinary.exit_code == 0
+    assert "stray file" in ordinary.output
+    assert strict.exit_code == 2
+    assert "Strict mode" in strict.output
+
+
 def test_an_unrecorded_file_in_the_anchor_dir_is_noted(store, cli):
     _anchor(store)
     with open(os.path.join(store.root, "anchors", "mystery.json"), "w") as fp:

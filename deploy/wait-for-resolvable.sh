@@ -18,9 +18,14 @@
 # failed poll for no poll at all, and only the second is unrecoverable.
 set -uo pipefail
 
-HOST="${1:-www.contractsfinder.service.gov.uk}"
+HOST="${1:-}"
 DEADLINE="${2:-120}"
 INTERVAL=3
+
+[ -n "$HOST" ] || {
+    echo "wait-for-resolvable: a readiness hostname is required" >&2
+    exit 2
+}
 
 elapsed=0
 while ! getent hosts "$HOST" >/dev/null 2>&1; do

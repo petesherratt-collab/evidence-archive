@@ -11,7 +11,6 @@ Type=oneshot
 EnvironmentFile=%h/.config/evidence-archive/environment
 # Destination is an rclone remote. Change it here rather than in the script,
 # which takes it as an argument precisely so the unit owns the policy.
-ExecStartPre=/usr/bin/env bash -c 'test -n "$EVIDENCE_BACKUP_DEST" && exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh" api.backblazeb2.com 120'
 ExecStart=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/backup-archive.sh" "$EVIDENCE_BACKUP_DEST" "$EVIDENCE_ROOT"'
 
 # The copy is staged and verified here before being uploaded. Not /tmp: a
