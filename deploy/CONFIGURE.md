@@ -18,10 +18,13 @@
    least 120% of the archive. Remote backups fail closed without it.
 7. Set `EVIDENCE_ALERT_URL` to the host-private HTTPS webhook that receives
    health failures; do not commit its credential-bearing URL.
-8. Configure `EVIDENCE_HEARTBEAT_URL` and a mode-600 token file for the
-   off-host dead-man workflow. The token needs only permission to dispatch the
-   `evidence-control` workflow. Local health alerts and off-host heartbeat
-   absence cover different failures; production needs both.
+8. Deploy the receiver described in `DEADMAN.md` on an independent host, then
+   configure its `EVIDENCE_DEADMAN_URL` and mode-600 token file. This endpoint
+   must not be `evidence-control`, and its credential must grant no access to
+   that repository. Local health alerts and off-host heartbeat absence cover
+   different failures; production needs both. Do not enable production until a
+   deliberately absent heartbeat and a failed alert delivery have both produced
+   alarms at the receiver's independently configured alarm destination.
 9. Set publisher and poll freshness thresholds from measured behavior, not the
    requested GitHub Actions cron. The example permits four hours of publisher
    age because the control history has exhibited one-to-three-hour gaps; it is

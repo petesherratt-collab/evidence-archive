@@ -78,16 +78,30 @@ linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)
 [ "$linger" = yes ] && ok LINGER || bad LINGER "run loginctl enable-linger $USER"
 [ -n "${EVIDENCE_ALERT_URL:-}" ] && ok ALERT "configured; delivery requires smoke test" || bad ALERT "EVIDENCE_ALERT_URL is unset"
 [ -n "${EVIDENCE_COLLECTOR_INSTANCE_ID:-}" ] && ok INSTANCE "$EVIDENCE_COLLECTOR_INSTANCE_ID" || bad INSTANCE "stable EVIDENCE_COLLECTOR_INSTANCE_ID is unset"
-if [ -n "${EVIDENCE_HEARTBEAT_URL:-}" ] && [ -r "${EVIDENCE_HEARTBEAT_TOKEN_FILE:-}" ]; then
-  token_mode=$(stat -c %a "$EVIDENCE_HEARTBEAT_TOKEN_FILE")
-  [ "$token_mode" = 600 ] && ok HEARTBEAT "configured; absence alarm still requires live test" || bad HEARTBEAT "token file mode must be 600"
-else bad HEARTBEAT "URL or readable token file is missing"; fi
+if [ "${EVIDENCE_READINESS_HOST:-}" = replace-with-reviewed-host.example ]; then
+  bad READINESS "shipped placeholder must be removed (leave empty to skip the wait)"
+else
+  ok READINESS "${EVIDENCE_READINESS_HOST:-disabled}"
+fi
+case "${EVIDENCE_DEADMAN_URL:-}" in
+  *api.github.com/repos/*/evidence-control/*|*github.com/*/evidence-control/*)
+    bad DEADMAN "endpoint must be independent of evidence-control" ;;
+  https://*)
+    if [ -r "${EVIDENCE_DEADMAN_TOKEN_FILE:-}" ]; then
+      token_mode=$(stat -c %a "$EVIDENCE_DEADMAN_TOKEN_FILE")
+      [ "$token_mode" = 600 ] && ok DEADMAN "separate endpoint configured; absence alarm requires live test" || bad DEADMAN "token file mode must be 600"
+    else bad DEADMAN "token file is unreadable"; fi ;;
+  *) bad DEADMAN "a separate HTTPS receiver URL is required" ;;
+esac
 
 pgrep -af 'kibitzr (run|once)' >/dev/null 2>&1 && bad COLLECTOR "another collector appears to be running" || ok COLLECTOR "none detected"
 if [ -n "$REPO" ]; then
   systemd-analyze verify "$REPO"/deploy/*.service "$REPO"/deploy/*.timer >/dev/null 2>&1 && ok SYSTEMD || bad SYSTEMD "unit verification failed"
 fi
 if [ -f "${ARCHIVE:-/nonexistent}/polls.db" ] && [ -x "${kb:-/nonexistent}" ]; then
+  startup_args=(archive collector-startup-check --root "$ARCHIVE" --instance "${EVIDENCE_COLLECTOR_INSTANCE_ID:-}")
+  [ -z "${EVIDENCE_COLLECTOR_HANDOVER_FROM:-}" ] || startup_args+=(--handover-from "$EVIDENCE_COLLECTOR_HANDOVER_FROM")
+  "$kb" "${startup_args[@]}" >/dev/null && ok OWNERSHIP || bad OWNERSHIP "collector instance conflicts with the archive; follow MIGRATE.md handover"
   "$kb" archive verify --root "$ARCHIVE" >/dev/null && ok VERIFY || bad VERIFY "archive verify failed"
   "$kb" archive fsck --strict --root "$ARCHIVE" >/dev/null && ok FSCK || bad FSCK "archive fsck found damage or suspect state"
   "$REPO/deploy/health-check.sh" >/dev/null && ok HEALTH || bad HEALTH "publisher/collector freshness check failed"

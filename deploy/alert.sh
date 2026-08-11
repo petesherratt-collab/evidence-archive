@@ -10,7 +10,7 @@ now=$(date +%s)
 if [ -f "$stamp" ]; then
   previous=$(stat -c %Y "$stamp")
   if [ $((now - previous)) -lt "$minimum" ]; then
-    echo "Alert suppressed: previous attempt was less than ${minimum}s ago" >&2
+    echo "Alert suppressed: previous successful delivery was less than ${minimum}s ago" >&2
     exit 0
   fi
 fi

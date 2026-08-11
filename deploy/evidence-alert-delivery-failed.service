@@ -1,0 +1,7 @@
+[Unit]
+Description=Report evidence alert delivery failure to off-host dead-man receiver
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/evidence-archive/environment
+ExecStart=/usr/bin/env bash -c 'exec "$EVIDENCE_REPO/deploy/send-deadman-event.sh" alert-delivery-failed "evidence-alert.service failed"'

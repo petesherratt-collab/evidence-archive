@@ -1,0 +1,9 @@
+[Unit]
+Description=Alarm when evidence collector heartbeat is absent
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/evidence-deadman/environment
+ExecStart=/usr/bin/python3 /opt/evidence-collection/repo/deploy/deadman-receiver.py check
+DynamicUser=true
+StateDirectory=evidence-deadman

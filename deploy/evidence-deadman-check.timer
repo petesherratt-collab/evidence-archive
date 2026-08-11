@@ -1,0 +1,9 @@
+[Unit]
+Description=Check evidence collector heartbeat age every five minutes
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=5m
+
+[Install]
+WantedBy=timers.target
