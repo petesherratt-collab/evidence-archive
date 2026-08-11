@@ -72,6 +72,9 @@ def extend_cli(group):
     @click.option("--handover-from", help="Explicit identity currently owning the archive")
     def collector_startup_check(root, instance, handover_from):
         """Refuse an accidental second collector or unreviewed host transition."""
+        if not os.path.exists(os.path.join(root, ArchiveStore.DB_NAME)):
+            click.echo(f"New archive accepted for collector instance: {instance}")
+            return
         store = _open(root)
         current = store.latest_collector_instance()
         if not current or current == instance:

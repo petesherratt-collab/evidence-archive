@@ -111,6 +111,13 @@ def test_collector_startup_guard_accepts_archive_without_prior_identity(store, c
     assert result.exit_code == 0
 
 
+def test_collector_startup_guard_accepts_new_archive_directory(tmp_path, cli):
+    result = _run(
+        cli, str(tmp_path / "not-created-yet"), "collector-startup-check",
+        "--instance", "first")
+    assert result.exit_code == 0
+
+
 # -- stall detection -----------------------------------------------------
 
 def test_a_ticking_control_does_not_stall(store):
