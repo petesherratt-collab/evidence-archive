@@ -798,6 +798,14 @@ class ArchiveStore:
             detail["hostname"] = hostname
         return self.record_annotation("note", detail)
 
+    def latest_collector_instance(self):
+        """Return the latest stable collector identity, if one was declared."""
+        transitions = [
+            item for item in self.annotations(kind="note")
+            if item["detail"].get("role") == "collector_instance"
+        ]
+        return transitions[-1]["detail"].get("instance_id") if transitions else None
+
     def control_checks(self):
         """Names of checks asserted to be controls, by note annotation."""
         return {

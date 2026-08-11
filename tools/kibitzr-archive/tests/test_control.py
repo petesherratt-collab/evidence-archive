@@ -90,6 +90,27 @@ def test_collector_instance_transition_is_append_only(store):
     ]
 
 
+def test_collector_startup_guard_requires_matching_handover(store, cli):
+    store.declare_collector_instance("collector-a", "host-a")
+    root = str(store.root)
+
+    same = _run(cli, root, "collector-startup-check", "--instance", "collector-a")
+    refused = _run(cli, root, "collector-startup-check", "--instance", "collector-b")
+    handed_over = _run(
+        cli, root, "collector-startup-check", "--instance", "collector-b",
+        "--handover-from", "collector-a")
+
+    assert same.exit_code == 0
+    assert refused.exit_code != 0
+    assert "archive belongs to collector instance 'collector-a'" in refused.output
+    assert handed_over.exit_code == 0
+
+
+def test_collector_startup_guard_accepts_archive_without_prior_identity(store, cli):
+    result = _run(cli, str(store.root), "collector-startup-check", "--instance", "first")
+    assert result.exit_code == 0
+
+
 # -- stall detection -----------------------------------------------------
 
 def test_a_ticking_control_does_not_stall(store):

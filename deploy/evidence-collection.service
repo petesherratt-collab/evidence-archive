@@ -25,7 +25,8 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/evidence-archive/environment
-ExecStartPre=/usr/bin/env bash -c 'test -n "$EVIDENCE_READINESS_HOST" && exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh" "$EVIDENCE_READINESS_HOST"'
+ExecStartPre=/usr/bin/env bash -c '[ -z "${EVIDENCE_READINESS_HOST:-}" ] || exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh" "$EVIDENCE_READINESS_HOST"'
+ExecStartPre=/usr/bin/env bash -c 'exec "$EVIDENCE_ROOT/.venv/bin/kibitzr" archive collector-startup-check --root "$EVIDENCE_ARCHIVE" --instance "$EVIDENCE_COLLECTOR_INSTANCE_ID" ${EVIDENCE_COLLECTOR_HANDOVER_FROM:+--handover-from "$EVIDENCE_COLLECTOR_HANDOVER_FROM"}'
 # The readiness helper has a 120-second ceiling. systemd's default start
 # timeout is commonly 90 seconds, which killed the helper before its own
 # bounded policy completed on 5 Aug 2026. Leave enough room for the helper to

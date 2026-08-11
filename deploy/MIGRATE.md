@@ -10,10 +10,13 @@
 7. Compare destination chain heads byte-for-byte with those recorded at source.
 8. Configure the new host and run preflight. Ensure the old host cannot restart
    through enablement, lingering sessions, cron, containers or supervisor jobs.
-9. Start exactly one new collector. If the annotation command/policy is
-   available, append a factual host/regime transition without changing history.
-   Set a new stable `EVIDENCE_COLLECTOR_INSTANCE_ID`; startup records that
-   transition on the annotation chain.
+9. Set a new stable `EVIDENCE_COLLECTOR_INSTANCE_ID`. If the archive's latest
+   collector-instance annotation names the old host, set
+   `EVIDENCE_COLLECTOR_HANDOVER_FROM` to that exact old instance ID for one
+   reviewed startup. The startup guard rejects a different instance unless this
+   explicit value matches; startup then records the transition on the annotation
+   chain. Remove `EVIDENCE_COLLECTOR_HANDOVER_FROM` immediately after the new
+   annotation is present and re-run preflight.
 10. Verify and inspect the first new polls, then anchor and back up again.
 
 Never overlap collectors. A valid chain on each of two divergent archives does

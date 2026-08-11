@@ -68,6 +68,25 @@ def extend_cli(group):
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--instance", required=True, help="Stable identity of this collector")
+    @click.option("--handover-from", help="Explicit identity currently owning the archive")
+    def collector_startup_check(root, instance, handover_from):
+        """Refuse an accidental second collector or unreviewed host transition."""
+        store = _open(root)
+        current = store.latest_collector_instance()
+        if not current or current == instance:
+            click.echo(f"Collector instance accepted: {instance}")
+            return
+        if handover_from == current:
+            click.echo(f"Collector handover accepted: {current} -> {instance}")
+            return
+        hint = (f" Set --handover-from {current!r} for the reviewed, one-time "
+                "handover, then remove the override.")
+        raise click.ClickException(
+            f"archive belongs to collector instance {current!r}, not {instance!r}." + hint)
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
     def status(root):
         """Per-check polls, changes and last observation"""
         store = _open(root)
