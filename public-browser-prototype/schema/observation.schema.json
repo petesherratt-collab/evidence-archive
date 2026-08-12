@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public Evidence Observation",
+  "type": "object",
+  "required": ["id", "target_id", "sequence", "observed_at", "result", "capture", "chain", "anchor"],
+  "properties": {
+    "id": {"type": "string"},
+    "target_id": {"type": "string"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "result": {
+      "type": "object",
+      "required": ["success"],
+      "properties": {
+        "success": {"type": "boolean"},
+        "http_status": {"type": ["integer", "null"]},
+        "final_url": {"type": ["string", "null"]},
+        "content_type": {"type": ["string", "null"]},
+        "content_length": {"type": ["integer", "null"], "minimum": 0},
+        "error_class": {"type": ["string", "null"]}
+      }
+    },
+    "capture": {
+      "type": "object",
+      "required": ["content_sha256", "changed"],
+      "properties": {
+        "content_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "previous_content_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "changed": {"type": ["boolean", "null"]},
+        "retained": {"type": "boolean"},
+        "public_copy": {"type": ["object", "null"]}
+      }
+    },
+    "chain": {
+      "type": "object",
+      "required": ["status", "entry_sha256"],
+      "properties": {
+        "status": {"enum": ["sound", "suspect", "broken"]},
+        "previous_entry_sha256": {"type": ["string", "null"]},
+        "entry_sha256": {"type": "string"},
+        "head_sha256": {"type": "string"}
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["none", "pending", "bitcoin-backed", "verification-failed"]},
+        "manifest_sha256": {"type": ["string", "null"]},
+        "submitted_at": {"type": ["string", "null"], "format": "date-time"},
+        "verified_at": {"type": ["string", "null"], "format": "date-time"},
+        "bitcoin": {
+          "type": ["object", "null"],
+          "properties": {
+            "block_height": {"type": "integer", "minimum": 0},
+            "block_time": {"type": "string", "format": "date-time"}
+          }
+        }
+      }
+    }
+  }
+}

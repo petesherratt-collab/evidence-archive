@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/evidence/public-export.schema.json",
+  "title": "Public Evidence Export",
+  "type": "object",
+  "required": ["schema_version", "export_id", "generated_at", "summary"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "export_id": {"type": "string"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "prototype": {"type": "boolean"},
+    "producer": {"type": "object"},
+    "summary": {
+      "type": "object",
+      "required": ["government_sources", "government_observations", "recorded_document_changes"],
+      "properties": {
+        "government_sources": {"type": "integer", "minimum": 0},
+        "control_checks": {"type": "integer", "minimum": 0},
+        "government_observations": {"type": "integer", "minimum": 0},
+        "recorded_document_changes": {"type": "integer", "minimum": 0},
+        "government_observations_awaiting_timestamp_coverage": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

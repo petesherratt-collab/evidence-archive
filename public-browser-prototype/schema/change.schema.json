@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public Evidence Change Event",
+  "type": "object",
+  "required": ["target_id", "observation_id", "first_observed_at", "previous_content_sha256", "current_content_sha256", "comparison"],
+  "properties": {
+    "target_id": {"type": "string"},
+    "observation_id": {"type": "string"},
+    "previous_observation_id": {"type": ["string", "null"]},
+    "first_observed_at": {"type": "string", "format": "date-time"},
+    "previous_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "current_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "comparison": {
+      "type": "object",
+      "required": ["mode", "raw_changed", "document_changed"],
+      "properties": {
+        "mode": {"type": "string"},
+        "raw_changed": {"type": "boolean"},
+        "document_changed": {"type": "boolean"}
+      }
+    },
+    "anchor_status": {"enum": ["none", "pending", "bitcoin-backed", "verification-failed"]}
+  }
+}
