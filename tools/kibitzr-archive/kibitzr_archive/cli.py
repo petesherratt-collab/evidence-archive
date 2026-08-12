@@ -12,6 +12,7 @@
     kibitzr archive anchor-upgrade  calendar attestation -> Bitcoin attestation
     kibitzr archive anchor-verify   check a proof still holds
     kibitzr archive calibration     measured lag between change and observation
+    kibitzr archive report          write a self-contained HTML dashboard
 """
 import json
 import os
@@ -64,6 +65,28 @@ def extend_cli(group):
     @group.group()
     def archive():
         """Inspect and verify the poll archive"""
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--instance", required=True, help="Stable identity of this collector")
+    @click.option("--handover-from", help="Explicit identity currently owning the archive")
+    def collector_startup_check(root, instance, handover_from):
+        """Refuse an accidental second collector or unreviewed host transition."""
+        if not os.path.exists(os.path.join(root, ArchiveStore.DB_NAME)):
+            click.echo(f"New archive accepted for collector instance: {instance}")
+            return
+        store = _open(root)
+        current = store.latest_collector_instance()
+        if not current or current == instance:
+            click.echo(f"Collector instance accepted: {instance}")
+            return
+        if handover_from == current:
+            click.echo(f"Collector handover accepted: {current} -> {instance}")
+            return
+        hint = (f" Set --handover-from {current!r} for the reviewed, one-time "
+                "handover, then remove the override.")
+        raise click.ClickException(
+            f"archive belongs to collector instance {current!r}, not {instance!r}." + hint)
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
@@ -215,6 +238,25 @@ def extend_cli(group):
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--output", default="report", show_default=True,
+                  help="Static report directory to write")
+    @click.option("--config", "config_path", type=click.Path(exists=True),
+                  help="kibitzr.yml used to reproduce current transforms")
+    @click.option("--archive-label", default="Evidence archive", show_default=True,
+                  help="Neutral public label for this archive")
+    def report(root, output, config_path, archive_label):
+        """Write a static, hash-backed evidence browser"""
+        from .report import write  # noqa: PLC0415
+
+        try:
+            path = write(_open(root), output, config_path=config_path,
+                         archive_label=archive_label)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Evidence browser written to {path / 'index.html'}")
+
+    @archive.command()
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
     @click.argument("name", nargs=-1)
     def verify(root, name):
         """Recompute hash chains; exits non-zero if any is broken"""
@@ -270,7 +312,11 @@ def extend_cli(group):
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
     @click.option("--quiet", is_flag=True,
                   help="Print only findings and the verdict")
-    def fsck(root, quiet):
+    @click.option("--strict", is_flag=True,
+                  help="Exit non-zero for suspect findings as well as damage")
+    @click.option("--allow-unanchored", is_flag=True,
+                  help="In strict mode, permit only unanchored-poll exposure")
+    def fsck(root, quiet, strict, allow_unanchored):
         """Blobs and proofs are present and match — what verify cannot see"""
         store = _open(root)
         findings, counts = integrity.check(store)
@@ -295,6 +341,19 @@ def extend_cli(group):
                 err=True,
             )
             sys.exit(1)
+
+        suspect = [f for f in findings if f.severity == integrity.SUSPECT]
+        rejected = [
+            f for f in suspect
+            if not (allow_unanchored and f.kind == "unanchored polls")
+        ]
+        if strict and rejected:
+            requirement = "a finding-free archive"
+            if allow_unanchored:
+                requirement += " except for explicitly allowed unanchored polls"
+            click.echo(f"\n{len(rejected)} suspect finding(s). Strict mode "
+                       f"requires {requirement}.", err=True)
+            sys.exit(2)
 
         # Said explicitly because the whole point of this command is that
         # "verify passed" was never the same statement as "nothing is missing".
@@ -428,15 +487,16 @@ def extend_cli(group):
         except AnchorError as exc:
             raise click.ClickException(str(exc))
 
+        if result["status"] == "failed":
+            click.echo(f"\nStamping failed: {result['output']}", err=True)
+            click.echo(
+                "Recorded on the annotation chain; no anchor was claimed "
+                "and no proof-less manifest was retained.", err=True)
+            sys.exit(1)
         click.echo(f"Manifest  {result['manifest_ref']}")
         click.echo(f"          sha256 {result['manifest_sha256']}")
         for check in result["checks"]:
             click.echo(f"  anchored  {check}")
-        if result["status"] == "failed":
-            click.echo(f"\nStamping failed: {result['output']}", err=True)
-            click.echo("Recorded as failed rather than silently skipped.",
-                       err=True)
-            sys.exit(1)
         click.echo(
             "\nProof is PENDING: it currently rests on the calendar servers, "
             "not\non Bitcoin. Run `archive anchor-upgrade` in a few hours to "
@@ -480,6 +540,28 @@ def extend_cli(group):
                 f"\n{len(pending)} proof(s) still PENDING — resting on the "
                 "calendar servers\nrather than Bitcoin. Run "
                 "`archive anchor-upgrade`."
+            )
+
+    @archive.command("reconcile-failed-anchors")
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    def reconcile_failed_anchors(root):
+        """Preserve and unindex legacy stamp attempts that made no proof"""
+        from .anchor import (  # noqa: PLC0415
+            AnchorError, reconcile_failed_attempts,
+        )
+
+        store = _open(root)
+        try:
+            repaired = reconcile_failed_attempts(store)
+        except AnchorError as exc:
+            raise click.ClickException(str(exc))
+        if not repaired:
+            click.echo("No legacy failed anchor attempts need reconciliation.")
+            return
+        for item in repaired:
+            click.echo(
+                f"Reconciled {item['manifest_ref']} ({item['rows']} row(s)); "
+                f"preserved as {item['preserved_as']}"
             )
 
     @archive.command(name="anchor-upgrade")

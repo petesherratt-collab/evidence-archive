@@ -1,5 +1,5 @@
 [Unit]
-Description=Evidence archive — UK government contract awards collection
+Description=Evidence archive collector
 Documentation=https://github.com/petesherratt-collab/evidence-archive
 # NOTE: this unit deliberately does NOT carry `After=network-online.target`.
 # It used to, with a comment claiming it prevented boot-time DNS failures being
@@ -24,9 +24,15 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory=/home/peters/evidence-collection
-ExecStartPre=/home/peters/evidence-collection/repo/deploy/wait-for-resolvable.sh
-ExecStart=/home/peters/evidence-collection/.venv/bin/kibitzr run
+EnvironmentFile=%h/.config/evidence-archive/environment
+ExecStartPre=/usr/bin/env bash -c '[ -z "${EVIDENCE_READINESS_HOST:-}" ] || exec "$EVIDENCE_REPO/deploy/wait-for-resolvable.sh" "$EVIDENCE_READINESS_HOST"'
+ExecStartPre=/usr/bin/env bash -c 'exec "$EVIDENCE_ROOT/.venv/bin/kibitzr" archive collector-startup-check --root "$EVIDENCE_ARCHIVE" --instance "$EVIDENCE_COLLECTOR_INSTANCE_ID" ${EVIDENCE_COLLECTOR_HANDOVER_FROM:+--handover-from "$EVIDENCE_COLLECTOR_HANDOVER_FROM"}'
+# The readiness helper has a 120-second ceiling. systemd's default start
+# timeout is commonly 90 seconds, which killed the helper before its own
+# bounded policy completed on 5 Aug 2026. Leave enough room for the helper to
+# finish and for kibitzr to initialise; this does not change the retry policy.
+TimeoutStartSec=150
+ExecStart=/usr/bin/env bash -c 'cd "$EVIDENCE_ROOT" && exec .venv/bin/kibitzr run'
 # kibitzr keeps its own schedule from each check's `period`, so this is a
 # long-lived process rather than a timer. A timer firing `once` would ignore
 # the per-check periods and poll every target at the same rate.

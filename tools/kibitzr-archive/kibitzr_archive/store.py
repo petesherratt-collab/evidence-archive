@@ -70,7 +70,8 @@ FETCH_SEMANTICS_NOTES = {
         "transient fetch errors are now retried before being recorded as "
         "failures, so failure counts are not comparable across this point"),
     3: ("fetch path hardened: the response cache was removed so every poll "
-        "reaches the origin, redirects are followed one vetted hop at a time, "
+        "performs a network fetch (an intermediary may still serve it), "
+        "redirects are followed one vetted hop at a time, "
         "connections are pinned to the addresses that were vetted, and the "
         "fetch is bounded by size and wall-clock deadline. A poll that would "
         "previously have been answered from cache, followed off-origin, or "
@@ -784,6 +785,27 @@ class ArchiveStore:
         body.update(detail or {})
         return self.record_annotation("note", body, check_name=check_name)
 
+    def declare_collector_instance(self, instance_id, hostname=None):
+        """Append a collector-host transition when the stable identity changes."""
+        previous = [
+            item for item in self.annotations(kind="note")
+            if item["detail"].get("role") == "collector_instance"
+        ]
+        if previous and previous[-1]["detail"].get("instance_id") == instance_id:
+            return None
+        detail = {"role": "collector_instance", "instance_id": instance_id}
+        if hostname:
+            detail["hostname"] = hostname
+        return self.record_annotation("note", detail)
+
+    def latest_collector_instance(self):
+        """Return the latest stable collector identity, if one was declared."""
+        transitions = [
+            item for item in self.annotations(kind="note")
+            if item["detail"].get("role") == "collector_instance"
+        ]
+        return transitions[-1]["detail"].get("instance_id") if transitions else None
+
     def control_checks(self):
         """Names of checks asserted to be controls, by note annotation."""
         return {
@@ -836,6 +858,21 @@ class ArchiveStore:
         query += " ORDER BY id"
         with self._connect() as conn:
             return [dict(row) for row in conn.execute(query, (check_name,))]
+
+    def poll_has_normalisation(self, poll_id):
+        """Whether a transform result is linked to this poll."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT 1 FROM normalisation WHERE poll_id = ?", (poll_id,)
+            ).fetchone() is not None
+
+    def recent_polls(self, limit=30):
+        """Most recent poll rows across checks, newest first, for reporting."""
+        limit = max(1, min(int(limit), 1000))
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT id, check_name, polled_at, ok, http_status, changed,"
+                " error FROM poll ORDER BY id DESC LIMIT ?", (limit,))]
 
     def gaps(self, check_name, tolerance=2.0):
         """Return intervals between polls that exceed the declared schedule.

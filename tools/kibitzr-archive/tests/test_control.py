@@ -1,10 +1,9 @@
 """Control checks: tagging, stall detection, and observation-lag calibration.
 
-A control is a page known to change faster than it is polled. Its value is
-entirely in the inversion it creates: for every other check a long run of
-unchanged polls is the finding, and for this one it is the alarm. These tests
-pin that inversion down, because getting it backwards would produce an archive
-that looks healthiest exactly when it has stopped working.
+A control is a page intended to change independently of the collector. Its
+publisher cadence is not guaranteed, so an unchanged run is an alarm to
+classify rather than proof of collector failure. These tests pin down the
+archive-side stall signal; deployment health also checks publisher freshness.
 """
 import gzip
 
@@ -72,6 +71,51 @@ def test_an_ordinary_note_does_not_make_a_check_a_control(store):
                             check_name="target")
 
     assert store.control_checks() == set()
+
+
+def test_collector_instance_transition_is_append_only(store):
+    first = store.declare_collector_instance("collector-a", "host-a")
+    duplicate = store.declare_collector_instance("collector-a", "host-a")
+    second = store.declare_collector_instance("collector-b", "host-b")
+
+    assert first is not None
+    assert duplicate is None
+    assert second is not None
+    transitions = [
+        row for row in store.annotations(kind="note")
+        if row["detail"].get("role") == "collector_instance"
+    ]
+    assert [row["detail"]["instance_id"] for row in transitions] == [
+        "collector-a", "collector-b"
+    ]
+
+
+def test_collector_startup_guard_requires_matching_handover(store, cli):
+    store.declare_collector_instance("collector-a", "host-a")
+    root = str(store.root)
+
+    same = _run(cli, root, "collector-startup-check", "--instance", "collector-a")
+    refused = _run(cli, root, "collector-startup-check", "--instance", "collector-b")
+    handed_over = _run(
+        cli, root, "collector-startup-check", "--instance", "collector-b",
+        "--handover-from", "collector-a")
+
+    assert same.exit_code == 0
+    assert refused.exit_code != 0
+    assert "archive belongs to collector instance 'collector-a'" in refused.output
+    assert handed_over.exit_code == 0
+
+
+def test_collector_startup_guard_accepts_archive_without_prior_identity(store, cli):
+    result = _run(cli, str(store.root), "collector-startup-check", "--instance", "first")
+    assert result.exit_code == 0
+
+
+def test_collector_startup_guard_accepts_new_archive_directory(tmp_path, cli):
+    result = _run(
+        cli, str(tmp_path / "not-created-yet"), "collector-startup-check",
+        "--instance", "first")
+    assert result.exit_code == 0
 
 
 # -- stall detection -----------------------------------------------------

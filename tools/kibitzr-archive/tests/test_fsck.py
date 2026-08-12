@@ -245,6 +245,27 @@ def test_a_missing_proof_file_is_a_failure(store, cli):
     assert "missing proof" in result.output
 
 
+def test_a_failed_stamp_does_not_leave_fsck_permanently_broken(
+        store, cli, monkeypatch):
+    """An external calendar outage is exposure, not lost evidence.
+
+    The failed attempt must remain auditable without manufacturing an anchor
+    record whose necessarily absent proof makes every future fsck fail.
+    """
+    from kibitzr_archive import anchor as anchor_mod
+
+    monkeypatch.setattr(anchor_mod, "find_ots", lambda explicit=None: "ots")
+    monkeypatch.setattr(anchor_mod, "_run",
+                        lambda argv, timeout: (1, "calendars unreachable"))
+    anchor_mod.stamp(store, ["ctf"])
+
+    result = _run(cli, store.root, "fsck")
+
+    assert result.exit_code == 0
+    assert "missing proof" not in result.output
+    assert "not yet covered" in result.output
+
+
 def test_a_missing_manifest_is_a_failure(store, cli):
     manifest_ref, _proof_ref = _anchor(store)
     os.remove(os.path.join(store.root, manifest_ref))
@@ -306,6 +327,56 @@ def test_the_ots_upgrade_backup_file_is_not_a_stray(store, cli):
 
     assert result.exit_code == 0
     assert "unrecorded proof file" not in result.output
+
+
+def test_strict_fsck_fails_on_suspect_findings(store, cli):
+    """Deployment gates can require a finding-free archive explicitly."""
+    with open(os.path.join(store.blob_root, "interrupted.tmp"), "wb") as fp:
+        fp.write(b"partial")
+
+    ordinary = _run(cli, store.root, "fsck")
+    strict = _run(cli, store.root, "fsck", "--strict")
+
+    assert ordinary.exit_code == 0
+    assert "stray file" in ordinary.output
+    assert strict.exit_code == 2
+    assert "Strict mode" in strict.output
+
+
+def test_allow_unanchored_permits_only_exposure_and_keeps_it_visible(store, cli):
+    strict = _run(cli, store.root, "fsck", "--strict")
+    allowed = _run(
+        cli, store.root, "fsck", "--strict", "--allow-unanchored"
+    )
+
+    assert strict.exit_code == 2
+    assert allowed.exit_code == 0
+    assert "unanchored polls" in allowed.output
+    assert "Sound, but 3 poll(s) are not yet covered by a proof." in allowed.output
+
+
+def test_allow_unanchored_still_rejects_other_suspect_findings(store, cli):
+    with open(os.path.join(store.blob_root, "interrupted.tmp"), "wb") as fp:
+        fp.write(b"partial")
+
+    result = _run(
+        cli, store.root, "fsck", "--strict", "--allow-unanchored"
+    )
+
+    assert result.exit_code == 2
+    assert "stray file" in result.output
+
+
+def test_allow_unanchored_still_rejects_broken_findings(store, cli):
+    raw_ref = store.observations("ctf")[0]["raw_ref"]
+    os.remove(store.blob_path(raw_ref))
+
+    result = _run(
+        cli, store.root, "fsck", "--strict", "--allow-unanchored"
+    )
+
+    assert result.exit_code == 1
+    assert "missing blob" in result.output
 
 
 def test_an_unrecorded_file_in_the_anchor_dir_is_noted(store, cli):

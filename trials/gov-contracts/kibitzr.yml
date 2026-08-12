@@ -342,15 +342,18 @@ checks:
   # archive's central claim, so leaving that ambiguity unresolved undercuts the
   # thing it exists to do.
   #
-  # petesherratt-collab/evidence-control rebuilds this page every 15 minutes
-  # from a GitHub Action. The mechanism shares nothing with this laptop, which
-  # is the property that matters: a control driven from here would stop when
-  # the collector stopped and would fail to detect precisely the outage it is
-  # for.
+  # petesherratt-collab/evidence-control asks GitHub Actions to rebuild this
+  # page every 15 minutes. The scheduler is best-effort and observed gaps have
+  # exceeded an hour, so 15 minutes is a requested cadence, not a guarantee.
+  # The mechanism shares nothing with this laptop, which is the property that
+  # matters: a control driven from here would stop when the collector stopped
+  # and would fail to detect precisely the outage it is for.
   #
-  # WHAT A TICK OBSERVED HERE SHOWS: at that moment the collector resolved a
-  # host, fetched from the open internet rather than a cache, decoded, hashed
-  # and recorded. That is a liveness claim about the instrument.
+  # WHAT A NEW TICK OBSERVED HERE SHOWS: at that moment the collector completed
+  # its public fetch path, received a representation different from the prior
+  # observation, decoded, hashed and recorded it. This does not prove that no
+  # cache participated anywhere in delivery; it rules out indefinite replay of
+  # the same stale representation.
   #
   # WHAT IT DOES NOT SHOW: anything about the OTHER targets' selectors. Each of
   # those is tuned to a page this one does not resemble, so a selector that has

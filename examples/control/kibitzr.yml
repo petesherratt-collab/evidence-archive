@@ -1,0 +1,8 @@
+checks:
+  - name: Evidence control target
+    url: https://replace-with-reviewed-control-target.invalid/
+    period: 1h
+    archive: true
+    transform:
+      - text
+      - changes: verbose

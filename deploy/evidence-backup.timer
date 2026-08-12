@@ -13,9 +13,9 @@ Persistent=true
 # is how backup targets get thundering herds. Costs nothing here.
 RandomizedDelaySec=20m
 
-# After the anchor timer (00:20) and before the upgrade (06:34), so the copy
-# taken each night includes that night's proof rather than trailing it by a
-# day.
+# The anchor timer uses a daily schedule with jitter and proof upgrades run
+# hourly. Do not infer a fixed ordering between these independent timers; each
+# backup records exactly the proofs present when its verified snapshot starts.
 
 [Install]
 WantedBy=timers.target

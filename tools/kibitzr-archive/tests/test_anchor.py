@@ -10,7 +10,9 @@ import os
 import pytest
 
 from kibitzr_archive import anchor as anchor_module
-from kibitzr_archive.anchor import AnchorError, build_manifest, stamp, upgrade
+from kibitzr_archive.anchor import (
+    AnchorError, build_manifest, reconcile_failed_attempts, stamp, upgrade,
+)
 from kibitzr_archive.store import GENESIS, ArchiveStore
 
 
@@ -151,7 +153,8 @@ def test_upgrade_promotes_only_when_the_proof_is_complete(store, fake_ots):
     assert {r["status"] for r in store.anchors()} == {"complete"}
 
 
-def test_a_failed_stamp_is_recorded_as_failed(store, monkeypatch):
+def test_a_failed_stamp_is_annotated_without_claiming_an_anchor(
+        store, monkeypatch):
     store.record_poll("a", content="x")
     monkeypatch.setattr(anchor_module, "find_ots", lambda explicit=None: "ots")
     monkeypatch.setattr(anchor_module, "_run",
@@ -160,8 +163,13 @@ def test_a_failed_stamp_is_recorded_as_failed(store, monkeypatch):
     result = stamp(store, ["a"])
 
     assert result["status"] == "failed"
-    assert store.anchors()[0]["status"] == "failed"
-    assert store.anchors()[0]["proof_ref"] is None
+    assert store.anchors() == []
+    assert not os.path.exists(os.path.join(
+        store.root, result["attempted_manifest_ref"]))
+    notes = store.annotations(kind="note")
+    assert len(notes) == 1
+    assert notes[0]["detail"]["event"] == "anchor_attempt_failed"
+    assert notes[0]["detail"]["manifest_sha256"] == result["manifest_sha256"]
 
 
 def test_a_failed_anchor_does_not_count_as_coverage(store, monkeypatch):
@@ -172,6 +180,34 @@ def test_a_failed_anchor_does_not_count_as_coverage(store, monkeypatch):
     stamp(store, ["a"])
 
     assert store.unanchored_polls("a") == 1
+
+
+def test_legacy_failed_attempts_are_preserved_and_unindexed(store):
+    """Repair old archives without deleting the evidence of the outage."""
+    store.record_poll("a", content="x")
+    manifest, encoded = build_manifest(
+        store, ["a"], created_at="2026-08-05T00:00:00+00:00")
+    manifest_ref = os.path.join("anchors", "legacy.json")
+    os.makedirs(os.path.join(store.root, "anchors"), exist_ok=True)
+    with open(os.path.join(store.root, manifest_ref), "wb") as handle:
+        handle.write(encoded)
+    from kibitzr_archive.store import sha256_hex
+    store.record_anchor(
+        manifest["checks"][0], "opentimestamps", manifest_ref,
+        sha256_hex(encoded), proof_ref=None, status="failed",
+        detail={"ots_output": "calendar outage"},
+        anchored_at=manifest["created_at"],
+    )
+
+    repaired = reconcile_failed_attempts(store)
+
+    assert repaired[0]["rows"] == 1
+    assert store.anchors() == []
+    assert not os.path.exists(os.path.join(store.root, manifest_ref))
+    assert os.path.exists(os.path.join(
+        store.root, "failed-anchor-attempts", "legacy.json"))
+    correction = store.annotations(kind="correction")[0]
+    assert correction["detail"]["event"] == "legacy_failed_anchor_reconciled"
 
 
 # -- exposure reporting ----------------------------------------------------

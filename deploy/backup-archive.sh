@@ -52,7 +52,7 @@
 # and anything else — including a polls.db swapped for an older one — is caught
 # by `fsck` on restore, which is what the chains and anchors were built for.
 #
-# Usage:  backup-archive.sh /media/peters/DRIVE   [/path/to/run-root]
+# Usage:  backup-archive.sh /media/operator/DRIVE [/path/to/run-root]
 #         backup-archive.sh b2:bucket/evidence    [/path/to/run-root]
 set -euo pipefail
 
@@ -82,7 +82,11 @@ esac
 # destination itself; for a remote it is scratch space on this machine, because
 # verification has to happen against real local files.
 if [ -n "$REMOTE" ]; then
-    STAGE_PARENT="${BACKUP_STAGE_DIR:-${TMPDIR:-/tmp}}"
+    [ -n "${BACKUP_STAGE_DIR:-}" ] || {
+        echo "Remote backup requires explicit BACKUP_STAGE_DIR; refusing /tmp fallback." >&2
+        exit 1
+    }
+    STAGE_PARENT="$BACKUP_STAGE_DIR"
 else
     STAGE_PARENT="$DEST_PARENT"
 fi
@@ -150,7 +154,8 @@ HEADS_END="$("$PYTHON" -c 'from kibitzr_archive import integrity; print(integrit
 # reporting success would be the same silent failure one step earlier.
 echo "== Checking the source archive before copying it"
 "$KIBITZR" archive verify --root "$SOURCE" || die "The SOURCE archive fails verify."
-"$KIBITZR" archive fsck   --root "$SOURCE" || die "The SOURCE archive fails fsck."
+"$KIBITZR" archive fsck --strict --allow-unanchored --root "$SOURCE" || \
+    die "The SOURCE archive has damage or suspect findings other than unanchored polls."
 
 echo ""
 echo "== Copying to $STAGING"
@@ -176,6 +181,18 @@ cp -a "$SOURCE/blobs" "$STAGING/"
 if [ -d "$SOURCE/anchors" ]; then
     cp -a "$SOURCE/anchors" "$STAGING/"
 fi
+# Append-only reconciliation evidence and the pre-reconciliation safety image
+# are part of this archive's history even though the active verifier does not
+# reference them. Migration must not silently narrow "the archive" to only the
+# files needed for a green fsck.
+if [ -d "$SOURCE/failed-anchor-attempts" ]; then
+    cp -a "$SOURCE/failed-anchor-attempts" "$STAGING/"
+fi
+for safety_db in "$SOURCE"/polls.db.pre-*; do
+    if [ -f "$safety_db" ]; then
+        cp -a "$safety_db" "$STAGING/"
+    fi
+done
 
 cat > "$STAGING/BACKUP.txt" <<EOF
 Evidence archive backup
@@ -219,7 +236,8 @@ sync -f "$STAGING/polls.db" 2>/dev/null || sync
 echo ""
 echo "== Verifying the copy"
 "$KIBITZR" archive verify --root "$STAGING" || die "The COPY fails verify."
-"$KIBITZR" archive fsck   --root "$STAGING" || die "The COPY fails fsck."
+"$KIBITZR" archive fsck --strict --allow-unanchored --root "$STAGING" || \
+    die "The COPY has damage or suspect findings other than unanchored polls."
 
 mv "$STAGING" "$FINAL"
 sync -f "$FINAL/polls.db" 2>/dev/null || sync

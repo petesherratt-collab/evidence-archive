@@ -1,0 +1,9 @@
+[Unit]
+Description=Send evidence collector heartbeat every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=1m
+
+[Install]
+WantedBy=timers.target
