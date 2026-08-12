@@ -154,8 +154,8 @@ HEADS_END="$("$PYTHON" -c 'from kibitzr_archive import integrity; print(integrit
 # reporting success would be the same silent failure one step earlier.
 echo "== Checking the source archive before copying it"
 "$KIBITZR" archive verify --root "$SOURCE" || die "The SOURCE archive fails verify."
-"$KIBITZR" archive fsck --strict --root "$SOURCE" || \
-    die "The SOURCE archive has damage or unresolved suspect findings."
+"$KIBITZR" archive fsck --strict --allow-unanchored --root "$SOURCE" || \
+    die "The SOURCE archive has damage or suspect findings other than unanchored polls."
 
 echo ""
 echo "== Copying to $STAGING"
@@ -236,8 +236,8 @@ sync -f "$STAGING/polls.db" 2>/dev/null || sync
 echo ""
 echo "== Verifying the copy"
 "$KIBITZR" archive verify --root "$STAGING" || die "The COPY fails verify."
-"$KIBITZR" archive fsck --strict --root "$STAGING" || \
-    die "The COPY has damage or unresolved suspect findings."
+"$KIBITZR" archive fsck --strict --allow-unanchored --root "$STAGING" || \
+    die "The COPY has damage or suspect findings other than unanchored polls."
 
 mv "$STAGING" "$FINAL"
 sync -f "$FINAL/polls.db" 2>/dev/null || sync

@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import re
 import subprocess
 from datetime import timezone
 from pathlib import Path
@@ -9,6 +10,29 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_live_integrity_service_allows_only_unanchored_exposure():
+    unit = (ROOT / "deploy/evidence-integrity.service").read_text()
+    assert "archive fsck --strict --allow-unanchored" in unit
+
+
+def test_backup_source_and_staged_copy_allow_unanchored_exposure():
+    script = (ROOT / "deploy/backup-archive.sh").read_text()
+    gates = re.findall(r'^"\$KIBITZR" archive fsck ([^\n]+)', script, re.MULTILINE)
+    assert gates == [
+        '--strict --allow-unanchored --root "$SOURCE" || \\',
+        '--strict --allow-unanchored --root "$STAGING" || \\',
+    ]
+
+
+def test_preflight_remains_a_fully_strict_quiescent_gate():
+    script = (ROOT / "deploy/preflight.sh").read_text()
+    gates = re.findall(r'archive fsck ([^\n]+)', script)
+    assert gates == [
+        '--strict --root "$ARCHIVE" >/dev/null && ok FSCK || bad FSCK '
+        '"archive fsck found damage or suspect state"'
+    ]
 
 
 def test_remote_backup_requires_explicit_stage_directory():

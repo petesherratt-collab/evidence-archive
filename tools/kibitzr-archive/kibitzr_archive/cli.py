@@ -314,7 +314,9 @@ def extend_cli(group):
                   help="Print only findings and the verdict")
     @click.option("--strict", is_flag=True,
                   help="Exit non-zero for suspect findings as well as damage")
-    def fsck(root, quiet, strict):
+    @click.option("--allow-unanchored", is_flag=True,
+                  help="In strict mode, permit only unanchored-poll exposure")
+    def fsck(root, quiet, strict, allow_unanchored):
         """Blobs and proofs are present and match — what verify cannot see"""
         store = _open(root)
         findings, counts = integrity.check(store)
@@ -341,11 +343,16 @@ def extend_cli(group):
             sys.exit(1)
 
         suspect = [f for f in findings if f.severity == integrity.SUSPECT]
-        if strict and suspect:
-            click.echo(
-                f"\n{len(suspect)} suspect finding(s). Strict mode requires "
-                f"a finding-free archive.", err=True,
-            )
+        rejected = [
+            f for f in suspect
+            if not (allow_unanchored and f.kind == "unanchored polls")
+        ]
+        if strict and rejected:
+            requirement = "a finding-free archive"
+            if allow_unanchored:
+                requirement += " except for explicitly allowed unanchored polls"
+            click.echo(f"\n{len(rejected)} suspect finding(s). Strict mode "
+                       f"requires {requirement}.", err=True)
             sys.exit(2)
 
         # Said explicitly because the whole point of this command is that

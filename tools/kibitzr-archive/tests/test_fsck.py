@@ -343,6 +343,42 @@ def test_strict_fsck_fails_on_suspect_findings(store, cli):
     assert "Strict mode" in strict.output
 
 
+def test_allow_unanchored_permits_only_exposure_and_keeps_it_visible(store, cli):
+    strict = _run(cli, store.root, "fsck", "--strict")
+    allowed = _run(
+        cli, store.root, "fsck", "--strict", "--allow-unanchored"
+    )
+
+    assert strict.exit_code == 2
+    assert allowed.exit_code == 0
+    assert "unanchored polls" in allowed.output
+    assert "Sound, but 3 poll(s) are not yet covered by a proof." in allowed.output
+
+
+def test_allow_unanchored_still_rejects_other_suspect_findings(store, cli):
+    with open(os.path.join(store.blob_root, "interrupted.tmp"), "wb") as fp:
+        fp.write(b"partial")
+
+    result = _run(
+        cli, store.root, "fsck", "--strict", "--allow-unanchored"
+    )
+
+    assert result.exit_code == 2
+    assert "stray file" in result.output
+
+
+def test_allow_unanchored_still_rejects_broken_findings(store, cli):
+    raw_ref = store.observations("ctf")[0]["raw_ref"]
+    os.remove(store.blob_path(raw_ref))
+
+    result = _run(
+        cli, store.root, "fsck", "--strict", "--allow-unanchored"
+    )
+
+    assert result.exit_code == 1
+    assert "missing blob" in result.output
+
+
 def test_an_unrecorded_file_in_the_anchor_dir_is_noted(store, cli):
     _anchor(store)
     with open(os.path.join(store.root, "anchors", "mystery.json"), "w") as fp:

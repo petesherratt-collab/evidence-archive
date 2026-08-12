@@ -155,6 +155,11 @@ at the digest embedded in each detached `.ots` proof, follows it through the
 manifest, and recomputes the database chains rather than trusting stored head
 values.
 
+Use `fsck --strict` for a quiescent, finding-free gate. Live operations may use
+`fsck --strict --allow-unanchored`: it permits only the normal exposure of
+polls not yet covered by a timestamp, while still reporting that exposure and
+rejecting every other suspect or broken integrity finding.
+
 These offline checks establish which bytes a proof covers, but not when they
 were attested. For every manifest, also run `ots verify anchors/<manifest>.ots`
 and compare the reported Bitcoin block time with the manifest's `created_at`.
