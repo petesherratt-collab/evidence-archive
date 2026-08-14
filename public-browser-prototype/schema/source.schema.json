@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public evidence source",
+  "type": "object",
+  "required": ["id", "name", "kind", "source_type", "category", "observation_count", "successful_observation_count", "chain_status", "timestamp_coverage"],
+  "properties": {
+    "id": {"type": "string"}, "name": {"type": "string"}, "kind": {"enum": ["source", "control"]}, "source_type": {"type": "string"}, "category": {"type": "string"}, "url": {"type": ["string", "null"]}, "configured_url": {"type": ["string", "null"]}, "observation_count": {"type": "integer", "minimum": 0}, "successful_observation_count": {"type": "integer", "minimum": 0}, "last_observed_at": {"type": ["string", "null"]}, "first_observed_at": {"type": ["string", "null"]}, "last_observation_attempt_at": {"type": ["string", "null"]}, "raw_change_count": {"type": "integer", "minimum": 0}, "document_change_count": {"type": "integer", "minimum": 0}, "recorded_change_count": {"type": "integer", "minimum": 0}, "latest_recorded_change_at": {"type": ["string", "null"]}, "chain_status": {"enum": ["sound", "suspect", "broken"]}, "chain_heads": {"type": "object"}, "timestamp_coverage": {"type": "object"}, "latest_timestamp_status": {"enum": ["none", "pending", "bitcoin-backed", "verification-failed"]}, "record_count": {"type": "integer", "minimum": 0}
+  }
+}

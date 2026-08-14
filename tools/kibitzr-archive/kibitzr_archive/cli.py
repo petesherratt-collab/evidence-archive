@@ -13,9 +13,11 @@
     kibitzr archive anchor-verify   check a proof still holds
     kibitzr archive calibration     measured lag between change and observation
     kibitzr archive report          write a self-contained HTML dashboard
+    kibitzr archive export-public   write a deterministic public JSON snapshot
 """
 import json
 import os
+import sqlite3
 import sys
 
 import click
@@ -254,6 +256,23 @@ def extend_cli(group):
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(f"Evidence browser written to {path / 'index.html'}")
+
+    @archive.command("export-public")
+    @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")
+    @click.option("--output", required=True, type=click.Path(),
+                  help="Public export directory, outside the archive root")
+    @click.option("--exclude-control", is_flag=True,
+                  help="Do not include the collector-liveness control source")
+    def export_public(root, output, exclude_control):
+        """Write a validated, read-only deterministic public JSON snapshot."""
+        from .public_export import build_export  # noqa: PLC0415
+
+        try:
+            path = build_export(root, output,
+                                include_control=not exclude_control)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(f"Public export written to {path / 'manifest.json'}")
 
     @archive.command()
     @click.option("--root", default=DEFAULT_ROOT, help="Archive root directory")

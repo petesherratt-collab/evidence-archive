@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public evidence observation",
+  "type": "object",
+  "required": ["id", "target_id", "sequence", "observed_at", "source", "result", "capture", "chain", "anchor", "record_ids"],
+  "properties": {
+    "id": {"type": "string"},
+    "target_id": {"type": "string"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "source": {"type": "object", "required": ["name", "url"], "properties": {"name": {"type": "string"}, "url": {"type": ["string", "null"]}}},
+    "result": {"type": "object", "required": ["success"], "properties": {"success": {"type": "boolean"}, "http_status": {"type": ["integer", "null"]}, "content_length": {"type": ["integer", "null"]}, "etag": {"type": ["string", "null"]}, "last_modified": {"type": ["string", "null"]}, "error": {"type": ["string", "null"]}}},
+    "capture": {"type": "object", "required": ["content_sha256", "previous_content_sha256", "changed", "retained"], "properties": {"content_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}, "previous_content_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}, "changed": {"type": ["boolean", "null"]}, "retained": {"type": "boolean"}, "public_copy": {"type": ["object", "null"]}}},
+    "normalisation": {"type": ["object", "null"], "properties": {"id": {"type": "string"}, "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "previous_content_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}, "changed": {"type": "boolean"}, "transform_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "record_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "record_ids": {"type": "array", "items": {"type": "string"}},
+    "chain": {"type": "object", "required": ["status", "previous_entry_sha256", "entry_sha256", "head_sha256"], "properties": {"status": {"enum": ["sound", "suspect", "broken"]}, "previous_entry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "entry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "head_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "anchor": {"type": "object", "required": ["status", "coverage"], "properties": {"status": {"enum": ["none", "pending", "bitcoin-backed", "verification-failed"]}, "coverage": {"type": "string"}, "manifest_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}, "submitted_at": {"type": ["string", "null"]}, "manifest_ref": {"type": ["string", "null"]}, "proof_ref": {"type": ["string", "null"]}, "head_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}}}
+  }
+}

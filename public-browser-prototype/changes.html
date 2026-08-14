@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recorded changes — UK Government Evidence Monitor</title><link rel="stylesheet" href="./styles.css"></head>
+<body data-page="changes"><main>
+<header><div><div class="eyebrow">Activity feed</div><h1>Recorded changes</h1><p class="sub">Events emitted only from reproducible comparisons of retained observations. The time shown is when the change was first observed.</p></div><nav><a href="./">Sources</a><a href="./changes.html">Changes</a></nav></header>
+<section class="filters"><label>Window<select id="filter-window"><option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d" selected>30 days</option><option value="all">All retained history</option></select></label><label>Source<select id="filter-source"><option value="">All sources</option></select></label><label>Change type<select id="filter-type"><option value="">All types</option></select></label><span id="change-count" class="muted"></span></section>
+<section><h2>Change feed</h2><table><thead><tr><th>First observed</th><th>Source</th><th>Record / title</th><th>Type</th><th>Old → new</th><th>Evidence</th></tr></thead><tbody id="change-rows"></tbody></table></section>
+<section class="callout"><strong>Interpretation boundary</strong><p class="sub">“Raw response changed” reports byte-level movement. “Structured/document content changed” reports a changed normalized capture. Neither says exactly when a publisher changed a page; both say when this collector first observed a difference.</p></section>
+</main><script src="./app.js"></script></body></html>

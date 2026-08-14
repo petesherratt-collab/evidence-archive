@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public procurement record",
+  "type": "object",
+  "required": ["id", "type", "title", "buyer", "supplier", "suppliers", "notice_type", "dates", "value", "classification", "status", "source", "evidence"],
+  "properties": {
+    "id": {"type": "string"}, "type": {"type": "string"}, "title": {"type": ["string", "null"]}, "buyer": {"type": ["object", "null"]}, "supplier": {"type": ["object", "null"]}, "suppliers": {"type": "array"}, "notice_type": {"type": ["string", "null"]},
+    "dates": {"type": "object", "required": ["published", "award", "start", "end", "first_observed", "last_observed", "first_observed_changed"], "properties": {"published": {"type": ["string", "null"]}, "award": {"type": ["string", "null"]}, "start": {"type": ["string", "null"]}, "end": {"type": ["string", "null"]}, "first_observed": {"type": "string"}, "last_observed": {"type": "string"}, "first_observed_changed": {"type": ["string", "null"]}}},
+    "value": {"type": ["object", "null"]}, "classification": {"type": "object", "required": ["cpv", "category"], "properties": {"cpv": {"type": "array"}, "category": {"type": ["string", "null"]}}}, "status": {"type": ["string", "null"]}, "source": {"type": "object", "required": ["target_id", "name", "url"], "properties": {"target_id": {"type": "string"}, "name": {"type": "string"}, "url": {"type": ["string", "null"]}, "notice_url": {"type": ["string", "null"]}}}, "evidence": {"type": "object", "required": ["observation_ids", "observation_count"], "properties": {"observation_ids": {"type": "array"}, "observation_count": {"type": "integer", "minimum": 1}}}
+  }
+}

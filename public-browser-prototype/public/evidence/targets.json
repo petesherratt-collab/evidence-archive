@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0.0-draft",
+  "prototype": true,
+  "targets": [
+    {
+      "id": "contracts-finder",
+      "name": "Contracts Finder — recent awards",
+      "category": "transactions",
+      "poll_count": 47,
+      "failure_count": 30,
+      "raw_change_count": 17,
+      "document_change_count": 10,
+      "uncovered_observation_count": 1,
+      "last_observed_at": "2026-08-05T10:16:11Z",
+      "last_recorded_change_at": null,
+      "chain_status": "sound",
+      "timestamp_status": "awaiting-coverage"
+    },
+    {
+      "id": "departmental-spend",
+      "name": "Departmental spend over £25k — monthly release",
+      "category": "transactions",
+      "poll_count": 17,
+      "failure_count": 0,
+      "raw_change_count": 17,
+      "document_change_count": 1,
+      "uncovered_observation_count": 1,
+      "last_observed_at": "2026-08-05T10:16:15Z",
+      "last_recorded_change_at": null,
+      "chain_status": "sound",
+      "timestamp_status": "awaiting-coverage"
+    },
+    {
+      "id": "find-a-tender",
+      "name": "Find a Tender — recent awards",
+      "category": "transactions",
+      "poll_count": 17,
+      "failure_count": 0,
+      "raw_change_count": 17,
+      "document_change_count": 12,
+      "uncovered_observation_count": 1,
+      "last_observed_at": "2026-08-05T10:16:13Z",
+      "last_recorded_change_at": null,
+      "chain_status": "sound",
+      "timestamp_status": "awaiting-coverage"
+    },
+    {
+      "id": "commercial-agreements",
+      "name": "Government Commercial Agency — agreements",
+      "category": "rules-intentions",
+      "poll_count": 17,
+      "failure_count": 0,
+      "raw_change_count": 16,
+      "document_change_count": 1,
+      "uncovered_observation_count": 1,
+      "last_observed_at": "2026-08-05T10:16:14Z",
+      "last_recorded_change_at": null,
+      "chain_status": "sound",
+      "timestamp_status": "awaiting-coverage"
+    },
+    {
+      "id": "uk-direct-awards",
+      "name": "UK direct awards — no competition",
+      "category": "transactions",
+      "poll_count": 17,
+      "failure_count": 0,
+      "raw_change_count": 17,
+      "document_change_count": 9,
+      "uncovered_observation_count": 1,
+      "last_observed_at": "2026-08-05T10:16:27Z",
+      "last_recorded_change_at": null,
+      "chain_status": "sound",
+      "timestamp_status": "awaiting-coverage"
+    }
+  ],
+  "control": {
+    "id": "collector-liveness",
+    "name": "Control — collector liveness",
+    "poll_count": 19,
+    "failure_count": 1,
+    "last_observed_at": "2026-08-05T10:16:28Z",
+    "chain_status": "sound",
+    "timestamp_status": "awaiting-coverage"
+  }
+}
+

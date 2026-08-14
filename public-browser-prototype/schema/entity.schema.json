@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public procurement entity",
+  "type": "object",
+  "required": ["id", "name", "role", "record_ids"],
+  "properties": {"id": {"type": "string"}, "name": {"type": ["string", "null"]}, "role": {"enum": ["buyer", "supplier"]}, "source_identifier": {"type": ["string", "null"]}, "record_ids": {"type": "array", "items": {"type": "string"}}}
+}

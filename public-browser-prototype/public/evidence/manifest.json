@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0.0-draft",
+  "export_id": "prototype-2026-08-05T10:47:50Z",
+  "generated_at": "2026-08-05T10:47:50Z",
+  "prototype": true,
+  "source_note": "Prototype data translated from the previously generated Evidence archive dashboard. Not a live export.",
+  "producer": {
+    "name": "public-evidence-export-prototype",
+    "git_commit": null,
+    "package_version": null
+  },
+  "summary": {
+    "government_sources": 5,
+    "control_checks": 1,
+    "government_observations": 115,
+    "recorded_document_changes": 33,
+    "government_observations_awaiting_timestamp_coverage": 5
+  }
+}
+

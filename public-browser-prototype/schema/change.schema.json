@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public deterministic change event",
+  "type": "object",
+  "required": ["id", "target_id", "observation_id", "first_observed_at", "event_type", "comparison"],
+  "properties": {
+    "id": {"type": "string"},
+    "target_id": {"type": "string"},
+    "observation_id": {"type": "string"},
+    "previous_observation_id": {"type": ["string", "null"]},
+    "first_observed_at": {"type": "string", "format": "date-time"},
+    "record_id": {"type": ["string", "null"]},
+    "title": {"type": ["string", "null"]},
+    "event_type": {"enum": ["first_seen", "raw_response_changed", "content_changed", "value_changed", "date_changed", "supplier_changed", "status_changed", "disappeared"]},
+    "comparison": {"type": "object", "required": ["mode"], "properties": {"mode": {"type": "string"}, "field": {"type": ["string", "null"]}, "old": {}, "new": {}}}
+  }
+}

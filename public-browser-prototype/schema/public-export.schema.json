@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evidence-archive.invalid/public-export.schema.json",
+  "title": "Evidence archive public export manifest",
+  "type": "object",
+  "required": ["schema_version", "export_id", "generated_at", "producer", "target_count", "observation_count", "recorded_change_count", "summary", "per_target_chain_heads", "files"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "export_id": {"type": "string"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "producer": {"type": "object", "required": ["name", "package_version"], "properties": {"name": {"type": "string"}, "git_commit": {"type": ["string", "null"]}, "package_version": {"type": "string"}}},
+    "source_collector_id": {"type": ["string", "null"]},
+    "target_count": {"type": "integer", "minimum": 0},
+    "observation_count": {"type": "integer", "minimum": 0},
+    "recorded_change_count": {"type": "integer", "minimum": 0},
+    "summary": {"type": "object", "required": ["government_sources", "control_checks", "government_observations", "recorded_changes", "timestamp_coverage_counts"], "properties": {"government_sources": {"type": "integer", "minimum": 0}, "control_checks": {"type": "integer", "minimum": 0}, "government_observations": {"type": "integer", "minimum": 0}, "recorded_changes": {"type": "integer", "minimum": 0}, "timestamp_coverage_counts": {"type": "object"}}},
+    "per_target_chain_heads": {"type": "array", "items": {"type": "object", "required": ["target_id", "poll", "normalisation", "annotation"], "properties": {"target_id": {"type": "string"}, "poll": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "normalisation": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "annotation": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}},
+    "files": {"type": "array", "items": {"type": "object", "required": ["path", "sha256", "bytes"], "properties": {"path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "bytes": {"type": "integer", "minimum": 0}}}}
+  }
+}

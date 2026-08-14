@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Read-only public evidence export for selected UK government sources.">
+<title>UK Government Evidence Monitor</title><link rel="stylesheet" href="./styles.css"></head>
+<body data-page="index"><main>
+<header><div><div class="eyebrow">Public evidence browser</div><h1>UK Government Evidence Monitor</h1><p class="sub">A read-only business-intelligence view derived from a deterministic export of retained public-source observations.</p><span class="badge">READ-ONLY PUBLIC EXPORT</span></div><nav><a href="./">Sources</a><a href="./changes.html">Changes</a></nav></header>
+<div class="cards" id="summary-cards"></div>
+<section><h2>Activity windows</h2><div class="activity"><div><strong id="activity-24">—</strong><span>changes in last 24h</span></div><div><strong id="activity-7">—</strong><span>changes in last 7d</span></div><div><strong id="activity-30">—</strong><span>changes in last 30d</span></div></div></section>
+<section><h2>Government sources monitored</h2><table><thead><tr><th>Source</th><th>Source type</th><th>Last observed</th><th>First observed changed / latest recorded change</th><th>Observations</th><th>Recorded changes</th><th>Chain</th><th>Timestamp</th></tr></thead><tbody id="source-rows"></tbody></table></section>
+<section><h2>Collector control</h2><p class="sub">The liveness target is an instrument check and is kept separate from procurement intelligence.</p><table><thead><tr><th>Source</th><th>Last observed</th><th>Observations</th><th>Recorded changes</th><th>Chain</th><th>Timestamp</th></tr></thead><tbody id="control-rows"></tbody></table></section>
+<section class="callout"><div class="legend"><div><strong>OBSERVED</strong><p>The source was successfully seen at this time. This is not the publisher’s change time.</p></div><div><strong>CHANGED</strong><p>The first observation whose deterministic comparison differed from the previous retained observation.</p></div><div><strong>ANCHORED</strong><p>Timestamp evidence is shown separately. A pending proof is not Bitcoin-backed.</p></div></div></section>
+<p class="footer" id="generated">Loading export…</p>
+</main><script src="./app.js"></script></body></html>
