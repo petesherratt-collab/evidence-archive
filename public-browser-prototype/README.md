@@ -10,7 +10,7 @@ is never executed by this application.
 From the repository root, with the archive plugin environment installed:
 
 ```bash
-../.venv/bin/kibitzr archive export-public \
+PYTHONPATH=tools/kibitzr-archive ../.venv/bin/kibitzr archive export-public \
   --root /home/peter/evidence-collection/archive \
   --output public-browser-prototype/public/evidence
 ```
