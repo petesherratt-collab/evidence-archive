@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entity — UK Government Evidence Monitor</title><link rel="stylesheet" href="./styles.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Buyer or supplier — UK Government Contract Intelligence</title><link rel="stylesheet" href="./styles.css"></head>
 <body data-page="entity"><main>
-<header><div><div class="eyebrow">Buyer / supplier entity</div><h1 id="title">Loading…</h1><p class="sub" id="entity-kind">Read-only relationship view</p></div><nav><a href="./">Sources</a><a href="./changes.html">Changes</a></nav></header>
+<header><div><div class="eyebrow">Buyer / supplier entity</div><h1 id="title">Loading…</h1><p class="sub" id="entity-kind">Read-only relationship view</p></div><nav><a href="./">Overview</a><a href="./contracts.html">Contracts</a><a href="./entities.html?role=buyer">Buyers</a><a href="./entities.html?role=supplier">Suppliers</a><a href="./changes.html">Activity</a><a href="./#sources">Sources</a></nav></header>
 <div class="cards" id="entity-summary"></div>
-<section><h2>Entity</h2><dl class="meta" id="entity-fields"></dl></section>
-<section><h2>Linked procurement records</h2><p class="sub">Relationships are limited to buyer → record and supplier → record. Corporate ownership and officer graphs are not part of this export.</p><table><thead><tr><th>Record</th><th>Source</th><th>Status</th><th>Value</th></tr></thead><tbody id="entity-record-rows"></tbody></table></section>
-</main><script src="./app.js"></script></body></html>
+<section><h2>Entity intelligence</h2><dl class="meta" id="entity-fields"></dl></section>
+<section><h2>Recent procurements</h2><p class="sub">Relationships use stable exported entity and record IDs; repeated observations do not create duplicate procurements.</p><table><thead><tr><th>Record</th><th>Source</th><th>Value</th><th>Official date</th><th>Status</th><th>Latest activity</th></tr></thead><tbody id="entity-record-rows"></tbody></table></section>
+</main><script src="./bi.js"></script><script src="./app.js"></script></body></html>

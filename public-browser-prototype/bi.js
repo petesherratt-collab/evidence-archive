@@ -1,0 +1,217 @@
+/* Pure, deterministic business-intelligence selectors and aggregates.
+ * The browser consumes the existing public export; this module does not fetch
+ * data, infer identities, fuzzy-match names, or mutate the export. */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  root.EvidenceBI = api;
+}(typeof globalThis === "object" ? globalThis : this, () => {
+  "use strict";
+
+  const RECORD_FIELD_EVENTS = new Set([
+    "value_changed", "date_changed", "supplier_changed", "status_changed"
+  ]);
+
+  function isBusinessIntelligenceTarget(source) {
+    if (!source) return false;
+    if (typeof source.business_intelligence_target === "boolean") {
+      return source.business_intelligence_target;
+    }
+    // `kind` is the existing exporter-owned target classification. Keeping
+    // this fallback makes the boundary explicit without changing the export.
+    return source.kind === "source";
+  }
+
+  function sourceMap(sources) {
+    return new Map((sources || []).map(source => [source.id, source]));
+  }
+
+  function targetIsBI(targetId, sourcesById) {
+    return isBusinessIntelligenceTarget(sourcesById.get(targetId));
+  }
+
+  function distinctById(items) {
+    const byId = new Map();
+    for (const item of items || []) {
+      if (item && item.id) byId.set(item.id, item);
+    }
+    return [...byId.values()];
+  }
+
+  function businessRecords(records, sources) {
+    const bySource = sourceMap(sources);
+    return distinctById((records || []).filter(record =>
+      record && targetIsBI(record.source?.target_id, bySource)));
+  }
+
+  function businessEvents(changes, sources) {
+    const bySource = sourceMap(sources);
+    return (changes || []).filter(change =>
+      change && targetIsBI(change.target_id, bySource));
+  }
+
+  function recordLevelEvents(changes, sources, {includeDisappeared = true} = {}) {
+    return businessEvents(changes, sources).filter(change =>
+      change.record_id && (includeDisappeared || change.event_type !== "disappeared"));
+  }
+
+  function procurementActivityEvents(changes, sources) {
+    // A disappearance is an archive projection fact, not procurement action.
+    return recordLevelEvents(changes, sources, {includeDisappeared: false});
+  }
+
+  function eventWithinWindow(event, generatedAt, days) {
+    const eventMs = Date.parse(event?.first_observed_at || "");
+    const endMs = Date.parse(generatedAt || "");
+    if (!Number.isFinite(eventMs) || !Number.isFinite(endMs) || eventMs > endMs) return false;
+    if (!Number.isFinite(days)) return true;
+    return eventMs >= endMs - (days * 86400000);
+  }
+
+  function windowEvents(events, generatedAt, days) {
+    return (events || []).filter(event => eventWithinWindow(event, generatedAt, days));
+  }
+
+  function partyEntries(record, role) {
+    if (role === "buyer") return record?.buyer ? [record.buyer] : [];
+    const suppliers = Array.isArray(record?.suppliers) ? record.suppliers : [];
+    if (suppliers.length) return suppliers;
+    return record?.supplier ? [record.supplier] : [];
+  }
+
+  function entityIds(records, role) {
+    const ids = new Set();
+    for (const record of distinctById(records)) {
+      for (const party of partyEntries(record, role)) {
+        if (party?.id) ids.add(party.id);
+      }
+    }
+    return ids;
+  }
+
+  function distinctEntityCount(records, role) {
+    return entityIds(records, role).size;
+  }
+
+  function entitiesForRecords(entities, records, role) {
+    const ids = entityIds(records, role);
+    const recordIds = new Set(distinctById(records).map(record => record.id));
+    return (entities || []).filter(entity => entity.role === role && (
+      ids.has(entity.id) || (entity.record_ids || []).some(recordId => recordIds.has(recordId))
+    ));
+  }
+
+  function recordValue(record) {
+    const value = record?.value;
+    if (!value || typeof value.amount !== "number" || !Number.isFinite(value.amount)) return null;
+    if (typeof value.currency !== "string" || !value.currency.trim()) return null;
+    return {amount: value.amount, currency: value.currency.trim()};
+  }
+
+  function aggregateValues(records) {
+    const unique = distinctById(records);
+    const totals = new Map();
+    const valuedRecordIds = new Set();
+    for (const record of unique) {
+      const value = recordValue(record);
+      if (!value) continue;
+      valuedRecordIds.add(record.id);
+      totals.set(value.currency, (totals.get(value.currency) || 0) + value.amount);
+    }
+    return {
+      record_count: unique.length,
+      valued_record_count: valuedRecordIds.size,
+      missing_value_count: unique.length - valuedRecordIds.size,
+      currencies: [...totals.entries()].sort(([a], [b]) => a.localeCompare(b))
+        .map(([currency, total]) => ({currency, total}))
+    };
+  }
+
+  function officialDate(record) {
+    return record?.dates?.award || record?.dates?.published || null;
+  }
+
+  function latestEventAt(events, recordIds) {
+    const ids = recordIds instanceof Set ? recordIds : new Set(recordIds || []);
+    return (events || []).filter(event => ids.has(event.record_id))
+      .map(event => event.first_observed_at)
+      .filter(Boolean)
+      .sort((a, b) => Date.parse(b) - Date.parse(a))[0] || null;
+  }
+
+  function recentRecords(records, events, generatedAt, days) {
+    const ids = new Set(windowEvents(events, generatedAt, days)
+      .map(event => event.record_id).filter(Boolean));
+    return distinctById(records).filter(record => ids.has(record.id));
+  }
+
+  function recordsForEntity(records, entityId, role, entities = []) {
+    const exported = (entities || []).find(entity => entity.id === entityId);
+    const exportedRecordIds = new Set(exported?.record_ids || []);
+    return distinctById(records).filter(record =>
+      exportedRecordIds.has(record.id) || partyEntries(record, role).some(party => party.id === entityId));
+  }
+
+  function rankedEntities(records, entities, role, events) {
+    const uniqueRecords = distinctById(records);
+    const roleEntities = entitiesForRecords(entities, uniqueRecords, role);
+    return roleEntities.map(entity => {
+      const linked = recordsForEntity(uniqueRecords, entity.id, role, entities);
+      const counterparties = new Set();
+      for (const record of linked) {
+        const otherRole = role === "buyer" ? "supplier" : "buyer";
+        for (const party of partyEntries(record, otherRole)) if (party.id) counterparties.add(party.id);
+      }
+      return {
+        entity,
+        records: linked,
+        procurement_count: linked.length,
+        counterparties_count: counterparties.size,
+        observed_value: aggregateValues(linked),
+        latest_activity: latestEventAt(events, new Set(linked.map(record => record.id)))
+      };
+    }).sort((a, b) => b.procurement_count - a.procurement_count ||
+      (Date.parse(b.latest_activity || "") || 0) - (Date.parse(a.latest_activity || "") || 0) ||
+      (a.entity.name || a.entity.id).localeCompare(b.entity.name || b.entity.id));
+  }
+
+  function categoryCoverage(records) {
+    const unique = distinctById(records);
+    const withCPV = unique.filter(record => record.classification?.cpv?.length).length;
+    return {record_count: unique.length, with_cpv: withCPV,
+      coverage: unique.length ? withCPV / unique.length : 0};
+  }
+
+  function timestampStatusText(status) {
+    if (status === "bitcoin-backed") return "Bitcoin-backed";
+    if (status === "pending") return "Pending — not Bitcoin-backed";
+    if (status === "verification-failed") return "Verification failed";
+    return "Awaiting coverage";
+  }
+
+  return {
+    RECORD_FIELD_EVENTS,
+    isBusinessIntelligenceTarget,
+    sourceMap,
+    distinctById,
+    businessRecords,
+    businessEvents,
+    recordLevelEvents,
+    procurementActivityEvents,
+    eventWithinWindow,
+    windowEvents,
+    partyEntries,
+    entityIds,
+    distinctEntityCount,
+    entitiesForRecords,
+    recordValue,
+    aggregateValues,
+    officialDate,
+    latestEventAt,
+    recentRecords,
+    recordsForEntity,
+    rankedEntities,
+    categoryCoverage,
+    timestampStatusText
+  };
+}));

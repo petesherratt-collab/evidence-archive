@@ -1,14 +1,29 @@
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Read-only public evidence export for selected UK government sources.">
-<title>UK Government Evidence Monitor</title><link rel="stylesheet" href="./styles.css"></head>
+<meta name="description" content="Read-only UK Government contract intelligence derived from retained public-source evidence.">
+<title>UK Government Contract Intelligence</title><link rel="stylesheet" href="./styles.css"></head>
 <body data-page="index"><main>
-<header><div><div class="eyebrow">Public evidence browser</div><h1>UK Government Evidence Monitor</h1><p class="sub">A read-only business-intelligence view derived from a deterministic export of retained public-source observations.</p><span class="badge">READ-ONLY PUBLIC EXPORT</span></div><nav><a href="./">Sources</a><a href="./changes.html">Changes</a></nav></header>
+<header><div><div class="eyebrow">Public contract intelligence</div><h1>UK Government Contract Intelligence</h1><p class="sub">Read-only intelligence derived from retained public-source evidence.</p><span class="badge">READ-ONLY / EVIDENCE-BACKED</span></div><nav><a href="./">Overview</a><a href="./contracts.html">Contracts</a><a href="./entities.html?role=buyer">Buyers</a><a href="./entities.html?role=supplier">Suppliers</a><a href="./changes.html">Activity</a><a href="./#sources">Sources</a></nav></header>
 <div class="cards" id="summary-cards"></div>
-<section><h2>Activity windows</h2><div class="activity"><div><strong id="activity-24">—</strong><span>changes in last 24h</span></div><div><strong id="activity-7">—</strong><span>changes in last 7d</span></div><div><strong id="activity-30">—</strong><span>changes in last 30d</span></div></div></section>
-<section><h2>Government sources monitored</h2><table><thead><tr><th>Source</th><th>Source type</th><th>Last observed</th><th>First observed changed / latest recorded change</th><th>Observations</th><th>Recorded changes</th><th>Chain</th><th>Timestamp</th></tr></thead><tbody id="source-rows"></tbody></table></section>
-<section><h2>Collector control</h2><p class="sub">The liveness target is an instrument check and is kept separate from procurement intelligence.</p><table><thead><tr><th>Source</th><th>Last observed</th><th>Observations</th><th>Recorded changes</th><th>Chain</th><th>Timestamp</th></tr></thead><tbody id="control-rows"></tbody></table></section>
-<section class="callout"><div class="legend"><div><strong>OBSERVED</strong><p>The source was successfully seen at this time. This is not the publisher’s change time.</p></div><div><strong>CHANGED</strong><p>The first observation whose deterministic comparison differed from the previous retained observation.</p></div><div><strong>ANCHORED</strong><p>Timestamp evidence is shown separately. A pending proof is not Bitcoin-backed.</p></div></div></section>
+
+<section><h2>Recent record activity</h2><p class="sub">Government procurement record events first observed by the archive. Source polling and the control target are excluded.</p><div class="activity"><div><strong id="activity-24">—</strong><span>record activity events in last 24h</span></div><div><strong id="activity-7">—</strong><span>record activity events in last 7d</span></div><div><strong id="activity-30">—</strong><span>record activity events in last 30d</span></div></div></section>
+
+<section><h2>Recent activity feed</h2><p class="sub">Time is when the archive first observed the deterministic event. Official award/publication dates remain on each record.</p><table><thead><tr><th>First observed</th><th>Event type</th><th>Procurement record</th><th>Buyer</th><th>Supplier</th><th>Value</th><th>Source</th><th>Evidence</th></tr></thead><tbody id="recent-activity-rows"></tbody></table></section>
+
+<section><h2>Largest recent awards</h2><p class="sub">Current record values for records active in the 30-day window. Rankings are within currency; currencies are not converted or combined.</p><div id="largest-awards"></div></section>
+
+<div class="two-col"><section><h2>Most active buyers</h2><p class="sub">Ranked by distinct procurement records, not repeated archive observations.</p><table><thead><tr><th>Buyer</th><th>Procurement count</th><th>Observed award value</th><th>Latest activity</th><th>Suppliers</th></tr></thead><tbody id="buyer-rows"></tbody></table></section>
+<section><h2>Most active suppliers</h2><p class="sub">Ranked by distinct procurement records, with linked buyer count.</p><table><thead><tr><th>Supplier</th><th>Procurement count</th><th>Buyers</th><th>Observed award value</th><th>Latest activity</th></tr></thead><tbody id="supplier-rows"></tbody></table></section></div>
+
+<section><h2>Recent direct awards</h2><p class="sub">The monitored direct-awards source explicitly establishes direct procurement method. No language heuristic is used.</p><table><thead><tr><th>Title</th><th>Buyer</th><th>Supplier</th><th>Value</th><th>Official date</th><th>Source</th></tr></thead><tbody id="direct-award-rows"></tbody></table></section>
+
+<section class="callout"><strong>Category coverage</strong><p class="sub">CPV is present for 1,077 of 1,888 government records (57%). Source-provided categories are retained on records and entity pages, but category ranking is not promoted here while coverage is incomplete.</p></section>
+
+<section id="sources"><h2>Monitored sources</h2><p class="sub">Latest record activity is separate from source/evidence timing. Events here are record-level business activity events.</p><table><thead><tr><th>Source</th><th>Last observed</th><th>Latest record activity</th><th>Records</th><th>Record events</th><th>Evidence status</th></tr></thead><tbody id="source-rows"></tbody></table></section>
+
+<section><h2>Evidence status</h2><p class="sub">Credibility follows the intelligence sections and remains visible without changing what the archive can prove.</p><div class="cards" id="evidence-status-summary"></div><div class="legend"><div><strong>OBSERVED</strong><p>The collector saw the source at this time. This is not the publisher's change time.</p></div><div><strong>CHANGED</strong><p>The first observation at which deterministic comparison differed.</p></div><div><strong>ANCHORED</strong><p>Independent timestamp evidence. Pending coverage is not Bitcoin-backed.</p></div></div></section>
+
+<section><h2>Collector control</h2><p class="sub">Operational instrument check — excluded from procurement intelligence metrics, rankings, and activity windows.</p><table><thead><tr><th>Target</th><th>Last observed</th><th>Observations</th><th>Operational events</th><th>Chain</th><th>Timestamp</th></tr></thead><tbody id="control-rows"></tbody></table></section>
 <p class="footer" id="generated">Loading export…</p>
-</main><script src="./app.js"></script></body></html>
+</main><script src="./bi.js"></script><script src="./app.js"></script></body></html>

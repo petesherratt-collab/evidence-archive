@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Evidence source — UK Government Evidence Monitor</title><link rel="stylesheet" href="./styles.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Monitored source — UK Government Contract Intelligence</title><link rel="stylesheet" href="./styles.css"></head>
 <body data-page="target"><main>
-<header><div><div class="eyebrow">Source view</div><h1 id="title">Loading…</h1><p class="sub" id="source-kind">Read-only source summary</p></div><nav><a href="./">Sources</a><a href="./changes.html">Changes</a></nav></header>
+<header><div><div class="eyebrow">Monitored source</div><h1 id="title">Loading…</h1><p class="sub" id="source-kind">Read-only source summary</p></div><nav><a href="./">Overview</a><a href="./contracts.html">Contracts</a><a href="./entities.html?role=buyer">Buyers</a><a href="./entities.html?role=supplier">Suppliers</a><a href="./changes.html">Activity</a><a href="./#sources">Sources</a></nav></header>
 <div class="cards" id="source-summary"></div>
 <section><h2>Source</h2><dl class="meta"><dt>Source URL</dt><dd id="source-url"></dd></dl><dl class="meta" id="source-metrics"></dl></section>
-<section><h2>Exposed procurement records</h2><p class="sub">Only structured records present in retained OCDS responses are shown. Empty here means the current evidence does not provide a structured record mapping.</p><table><thead><tr><th>Title</th><th>Buyer</th><th>Supplier</th><th>Status</th><th>Value</th></tr></thead><tbody id="record-rows"></tbody></table></section>
-<section><h2>Observation history</h2><table><thead><tr><th>Sequence</th><th>Observed</th><th>Result</th><th>Changed</th><th>Content SHA-256</th><th>Chain</th><th>Timestamp</th><th>Evidence</th></tr></thead><tbody id="observation-rows"></tbody></table></section>
-</main><script src="./app.js"></script></body></html>
+<section><h2>Structured procurement records</h2><p class="sub">Records are deduplicated by the export's stable record ID. Empty means the current evidence does not provide a structured record mapping.</p><table><thead><tr><th>Title</th><th>Buyer</th><th>Supplier</th><th>Value</th><th>Official date</th><th>Status</th></tr></thead><tbody id="record-rows"></tbody></table></section>
+<section><h2>Observation history</h2><table><thead><tr><th>Sequence</th><th>Observed</th><th>Result</th><th>Response changed</th><th>Content SHA-256</th><th>Chain</th><th>Timestamp</th><th>Evidence</th></tr></thead><tbody id="observation-rows"></tbody></table></section>
+</main><script src="./bi.js"></script><script src="./app.js"></script></body></html>
