@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-evidence:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install archive test environment
+        run: python -m pip install -e 'tools/kibitzr-archive[test]'
+      - name: Python tests and deterministic fixture verification
+        run: python -m pytest tools/kibitzr-archive/tests -q
+      - name: Browser tests
+        run: node --test public-browser-prototype/tests/*.test.js
+      - name: Static syntax checks
+        run: |
+          python -m compileall -q tools/kibitzr-archive/kibitzr_archive deploy
+          for file in public-browser-prototype/*.js public-browser-prototype/tests/*.js; do node --check "$file"; done
+          bash -n deploy/*.sh
