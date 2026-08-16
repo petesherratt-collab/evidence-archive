@@ -34,6 +34,13 @@ python3 -m http.server 8000 --directory public-browser-prototype
 Open `http://localhost:8000/`. The UI is static and can be deployed from this
 directory to Vercel with no runtime secrets.
 
+Contracts, buyers, suppliers, and recent activity can export the complete
+filtered-and-sorted view to UTF-8 CSV; pagination does not truncate the export.
+Every cell is quoted, and cells whose first character is `=`, `+`, `-`, or `@`
+receive a leading apostrophe in the CSV only. This deterministic convention
+prevents spreadsheet applications from treating untrusted source text as a
+formula. The JSON evidence values are unchanged.
+
 ## Evidence limits
 
 The current archive stores structured OCDS payloads for Contracts Finder, Find a

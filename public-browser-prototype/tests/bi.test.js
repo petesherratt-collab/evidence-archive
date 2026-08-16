@@ -79,3 +79,29 @@ test("aggregate and classification output is deterministic", () => {
   });
   assert.equal(first, second);
 });
+
+test("universal search groups deterministic substring and token matches", () => {
+  const entities = [{id: "b1", role: "buyer", name: "Buyer One"}, {id: "s1", role: "supplier", name: "Supplier One"}];
+  const result = BI.universalSearch(records, entities, "buyer one");
+  assert.deepEqual(result.contracts.map(item => item.id), ["r-old"]);
+  assert.deepEqual(result.buyers.map(item => item.id), ["b1"]);
+  assert.deepEqual(result.suppliers, []);
+});
+
+test("stable sorting keeps nulls last and pagination bounds the DOM slice", () => {
+  const items = [{id: "a", value: 2}, {id: "b", value: null}, {id: "c", value: 2}, {id: "d", value: 1}];
+  assert.deepEqual(BI.stableSort(items, item => item.value, "number", "asc").map(item => item.id), ["d", "a", "c", "b"]);
+  assert.deepEqual(BI.stableSort(items, item => item.value, "number", "desc").map(item => item.id), ["a", "c", "d", "b"]);
+  const many = Array.from({length: 127}, (_, index) => index);
+  assert.deepEqual(BI.paginate(many, 2, 50), {items: many.slice(50, 100), page: 2, page_size: 50, page_count: 3, total: 127});
+});
+
+test("CSV is UTF-8, quoted, newline-safe, and neutralises spreadsheet formulas", () => {
+  const csv = BI.csvEncode([["name", "note"], ["=2+2", "comma, quote \" and\nnewline"], ["+cmd", "-1"], ["@x", "safe"]]);
+  assert.equal(csv.charCodeAt(0), 0xfeff);
+  assert.match(csv, /"'=2\+2"/);
+  assert.match(csv, /"'\+cmd"/);
+  assert.match(csv, /"'-1"/);
+  assert.match(csv, /"'@x"/);
+  assert.match(csv, /"comma, quote "" and\nnewline"/);
+});

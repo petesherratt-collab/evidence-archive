@@ -60,6 +60,73 @@
     return row;
   };
 
+  function downloadCsv(filename, rows) {
+    const blob = new Blob([BI.csvEncode(rows)], {type: "text/csv;charset=utf-8"});
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = href; anchor.download = filename; anchor.click(); URL.revokeObjectURL(href);
+  }
+
+  function setupPager(prefix, redraw) {
+    const view = {page: 1, pageSize: 25};
+    const size = $(`#${prefix}-page-size`), previous = $(`#${prefix}-previous`), next = $(`#${prefix}-next`);
+    size.addEventListener("change", () => { view.pageSize = Number(size.value); view.page = 1; redraw(); });
+    previous.addEventListener("click", () => { view.page -= 1; redraw(); });
+    next.addEventListener("click", () => { view.page += 1; redraw(); });
+    view.update = result => {
+      view.page = result.page; $(`#${prefix}-page-status`).textContent = `Page ${result.page} of ${result.page_count}`;
+      previous.disabled = result.page <= 1; next.disabled = result.page >= result.page_count;
+    };
+    return view;
+  }
+
+  function setupSort(table, initialKey, initialDirection, redraw) {
+    const view = {key: initialKey, direction: initialDirection};
+    for (const button of table.querySelectorAll("button[data-sort]")) button.addEventListener("click", () => {
+      view.direction = view.key === button.dataset.sort && view.direction === "asc" ? "desc" : "asc";
+      view.key = button.dataset.sort; redraw();
+    });
+    view.update = () => { for (const button of table.querySelectorAll("button[data-sort]")) {
+      const active = button.dataset.sort === view.key;
+      button.querySelector("span").textContent = active ? (view.direction === "asc" ? "▲" : "▼") : "";
+      button.setAttribute("aria-sort", active ? (view.direction === "asc" ? "ascending" : "descending") : "none");
+    }};
+    return view;
+  }
+
+  function setupUniversalSearch() {
+    const host = el("div", "universal-search"), label = el("label", "", ["Search contracts, buyers or suppliers…"]);
+    const input = el("input"), results = el("div", "search-results");
+    input.type = "search"; input.placeholder = "Search contracts, buyers or suppliers…";
+    input.setAttribute("aria-label", "Search contracts, buyers or suppliers"); results.hidden = true;
+    label.append(input); host.append(label, results); $("header").after(host);
+    input.addEventListener("input", () => {
+      const grouped = BI.universalSearch(governmentRecords(), state.entities, input.value);
+      results.replaceChildren(); if (!input.value.trim()) { results.hidden = true; return; }
+      for (const [key, title] of [["contracts", "Contracts"], ["buyers", "Buyers"], ["suppliers", "Suppliers"]]) {
+        results.append(el("h2", "", [title])); const list = el("ul");
+        for (const item of grouped[key]) list.append(el("li", "", [key === "contracts" ? recordLink(item) : entityLink(item)]));
+        if (!grouped[key].length) list.append(el("li", "muted", ["No matches"])); results.append(list);
+      }
+      results.hidden = false;
+    });
+  }
+
+  function setupBreadcrumbs(page) {
+    if (page === "index") return;
+    const crumbs = el("nav", "breadcrumbs", [link("Overview", "./")]);
+    const add = (label, href) => crumbs.append(text(" / "), href ? link(label, href) : el("span", "", [label]));
+    const params = new URLSearchParams(location.search);
+    if (page === "contracts") add("Contracts");
+    else if (page === "entities") add(params.get("role") === "supplier" ? "Suppliers" : "Buyers");
+    else if (page === "changes") add("Recent activity");
+    else if (page === "entity") { const item = entityById(params.get("id")); add(item?.role === "supplier" ? "Suppliers" : "Buyers", `./entities.html?role=${item?.role === "supplier" ? "supplier" : "buyer"}`); add(item?.name || "Entity"); }
+    else if (page === "record") { add("Contracts", "./contracts.html"); add(recordById(params.get("id"))?.title || "Contract"); }
+    else if (page === "evidence") { const event = state.changes.find(item => item.observation_id === params.get("id") && item.record_id); if (event) { add("Contracts", "./contracts.html"); add(recordById(event.record_id)?.title || "Contract", `./record.html?id=${encodeURIComponent(event.record_id)}`); } add("Evidence"); }
+    else add("Sources", "./#sources");
+    $("header").before(crumbs);
+  }
+
   async function getJson(name) {
     const response = await fetch(`${ROOT}/${name}`, {cache: "no-store"});
     if (!response.ok) throw new Error(`Could not load ${name}`);
@@ -376,7 +443,10 @@
     const params = new URLSearchParams(location.search);
     if (params.get("target")) sourceSelect.value = params.get("target");
     if (params.get("window")) $("#filter-window").value = params.get("window");
-    const draw = () => {
+    let filteredForExport = [], draw = () => {};
+    const pager = setupPager("activity", () => draw());
+    const sort = setupSort($("#activity-table"), "observed", "desc", () => { pager.page = 1; draw(); });
+    draw = () => {
       const windowValue = $("#filter-window").value;
       const days = windowValue === "24h" ? 1 : windowValue === "7d" ? 7 : windowValue === "30d" ? 30 : Infinity;
       const includeControl = $("#filter-include-control").checked;
@@ -388,9 +458,13 @@
         partyMatches(recordById(change.record_id), $("#filter-supplier").value, "supplier"));
       const body = $("#change-rows");
       body.replaceChildren();
-      const sorted = sortRecent(filtered);
-      if (!sorted.length) body.append(emptyRow(8, "No matching deterministic events."));
-      for (const change of sorted) {
+      const accessors = {observed: change => change.first_observed_at, type: change => change.event_type,
+        source: change => sourceById(change.target_id)?.name, buyer: change => recordById(change.record_id)?.buyer?.name,
+        supplier: change => partyNames(recordById(change.record_id), "supplier")};
+      const sorted = BI.stableSort(filtered, accessors[sort.key], sort.key === "observed" ? "date" : "text", sort.direction);
+      filteredForExport = sorted; const page = BI.paginate(sorted, pager.page, pager.pageSize);
+      if (!page.items.length) body.append(emptyRow(8, "No matching deterministic events."));
+      for (const change of page.items) {
         const source = sourceById(change.target_id);
         const record = recordById(change.record_id);
         body.append(el("tr", "", [
@@ -402,37 +476,70 @@
           tableCell(evidenceLink(change.observation_id))
         ]));
       }
+      pager.update(page); sort.update();
       $("#change-count").textContent = `${sorted.length} deterministic event${sorted.length === 1 ? "" : "s"}`;
       $("#activity-scope").textContent = includeControl ?
         "Control included for operational review; it is excluded by default." :
         "Government procurement targets only; control excluded by default.";
     };
     ["#filter-window", "#filter-source", "#filter-type", "#filter-buyer", "#filter-supplier", "#filter-include-control"].forEach(selector => {
-      $(selector).addEventListener("input", draw);
-      $(selector).addEventListener("change", draw);
+      $(selector).addEventListener("input", () => { pager.page = 1; draw(); });
+      $(selector).addEventListener("change", () => { pager.page = 1; draw(); });
     });
+    $("#activity-export").addEventListener("click", () => downloadCsv("recent-activity.csv", [["First observed", "Event type", "Record ID", "Title", "Buyer", "Supplier", "Award value", "Currency", "Source", "Observation ID"],
+      ...filteredForExport.map(change => { const record = recordById(change.record_id), value = BI.recordValue(record); return [change.first_observed_at, change.event_type, change.record_id, record?.title, record?.buyer?.name, partyNames(record, "supplier"), value?.amount, value?.currency, sourceById(change.target_id)?.name, change.observation_id]; })]));
     draw();
   }
 
   function renderContracts() {
     const body = $("#contract-rows");
     const search = $("#contract-search");
-    const draw = () => {
-      const query = search.value.trim().toLocaleLowerCase();
-      const rows = governmentRecords().filter(record =>
-        !query || [record.title, record.buyer?.name, partyNames(record, "supplier"), record.classification?.category]
-          .filter(Boolean).join(" ").toLocaleLowerCase().includes(query));
+    appendFilterOptions($("#contract-source"), governmentSources().map(source => [source.id, source.name]));
+    const currencies = [...new Set(governmentRecords().map(record => BI.recordValue(record)?.currency).filter(Boolean))].sort();
+    appendFilterOptions($("#contract-currency"), currencies.map(currency => [currency, currency]));
+    for (const [role, id] of [["buyer", "contract-buyer-options"], ["supplier", "contract-supplier-options"]]) {
+      for (const entity of state.entities.filter(item => item.role === role)) {
+        const option = el("option", "", [entity.name || entity.id]); option.value = entity.name || entity.id; $("#" + id).append(option);
+      }
+    }
+    let filteredForExport = [], draw = () => {};
+    const pager = setupPager("contracts", () => draw());
+    const sort = setupSort($("#contracts-table"), "date", "desc", () => { pager.page = 1; draw(); });
+    draw = () => {
+      const windowValue = $("#contract-window").value;
+      const days = windowValue === "30d" ? 30 : windowValue === "90d" ? 90 : windowValue === "1y" ? 365 : Infinity;
+      const end = Date.parse(state.manifest.generated_at), currency = $("#contract-currency").value;
+      const minimum = $("#contract-min").value === "" ? null : Number($("#contract-min").value);
+      const maximum = $("#contract-max").value === "" ? null : Number($("#contract-max").value);
+      const rows = governmentRecords().filter(record => {
+        const value = BI.recordValue(record), date = Date.parse(BI.officialDate(record) || "");
+        return BI.tokenMatch([record.title, record.id, record.source?.source_record_id, record.buyer?.name, record.buyer?.id, partyNames(record, "supplier")], search.value) &&
+          (!$("#contract-source").value || record.source.target_id === $("#contract-source").value) &&
+          (!Number.isFinite(days) || (Number.isFinite(date) && date <= end && date >= end - days * 86400000)) &&
+          (!currency || value?.currency === currency) &&
+          (minimum == null || (value?.currency === currency && value.amount >= minimum)) &&
+          (maximum == null || (value?.currency === currency && value.amount <= maximum)) &&
+          partyMatches(record, $("#contract-buyer").value, "buyer") && partyMatches(record, $("#contract-supplier").value, "supplier");
+      });
+      const accessors = {title: r => r.title, buyer: r => r.buyer?.name, supplier: r => partyNames(r, "supplier"),
+        date: r => BI.officialDate(r), value: r => currency && BI.recordValue(r)?.currency === currency ? BI.recordValue(r)?.amount : null};
+      const sorted = BI.stableSort(rows, accessors[sort.key], {date: "date", value: "number"}[sort.key] || "text", sort.direction);
+      filteredForExport = sorted; const page = BI.paginate(sorted, pager.page, pager.pageSize);
       body.replaceChildren();
-      if (!rows.length) body.append(emptyRow(7, "No matching procurement records."));
-      for (const record of rows) body.append(el("tr", "", [
+      if (!page.items.length) body.append(emptyRow(7, "No matching procurement records."));
+      for (const record of page.items) body.append(el("tr", "", [
         tableCell(recordLink(record)), tableCell(record.buyer ? entityLink(record.buyer) : "—"),
         tableCell(recordParties(record, "supplier").length ? recordParties(record, "supplier") : "—"),
         tableCell(recordValue(record)), tableCell(officialDateNode(record)),
         tableCell(record.classification?.category || "—"), tableCell(sourceLink(sourceById(record.source.target_id)))
       ]));
       $("#contract-count").textContent = `${rows.length} procurement record${rows.length === 1 ? "" : "s"}`;
+      pager.update(page); sort.update();
     };
-    search.addEventListener("input", draw);
+    ["#contract-search", "#contract-source", "#contract-window", "#contract-currency", "#contract-min", "#contract-max", "#contract-buyer", "#contract-supplier"].forEach(selector =>
+      $(selector).addEventListener("input", () => { pager.page = 1; draw(); }));
+    $("#contracts-export").addEventListener("click", () => downloadCsv("contracts.csv", [["Record ID", "Title", "Buyer", "Supplier", "Award value", "Currency", "Official date", "CPV category", "Source"],
+      ...filteredForExport.map(record => { const value = BI.recordValue(record); return [record.id, record.title, record.buyer?.name, partyNames(record, "supplier"), value?.amount, value?.currency, BI.officialDate(record), record.classification?.category, sourceById(record.source.target_id)?.name]; })]));
     draw();
   }
 
@@ -445,19 +552,30 @@
     $("#directory-kind").textContent = role === "buyer" ? "Government buyers linked to distinct procurement records." : "Suppliers linked to distinct government procurement records.";
     const search = $("#entity-search");
     const body = $("#entity-rows");
-    const draw = () => {
+    let filteredForExport = [], draw = () => {};
+    const pager = setupPager("entities", () => draw());
+    const sort = setupSort($("#entities-table"), "count", "desc", () => { pager.page = 1; draw(); });
+    draw = () => {
       const query = search.value.trim().toLocaleLowerCase();
-      const filtered = rows.filter(row => (row.entity.name || row.entity.id).toLocaleLowerCase().includes(query));
+      const filtered = rows.filter(row => BI.tokenMatch([row.entity.name, row.entity.id], query));
+      const accessors = {name: row => row.entity.name || row.entity.id, count: row => row.procurement_count,
+        value: row => row.observed_value.currencies.length === 1 ? row.observed_value.currencies[0].total : null,
+        activity: row => row.latest_activity};
+      const sorted = BI.stableSort(filtered, accessors[sort.key], {count: "number", value: "number", activity: "date"}[sort.key] || "text", sort.direction);
+      filteredForExport = sorted; const page = BI.paginate(sorted, pager.page, pager.pageSize);
       body.replaceChildren();
-      if (!filtered.length) body.append(emptyRow(5, "No matching entities."));
-      for (const row of filtered) body.append(el("tr", "", [
+      if (!page.items.length) body.append(emptyRow(5, "No matching entities."));
+      for (const row of page.items) body.append(el("tr", "", [
         tableCell(entityLink(row.entity)), tableCell(row.procurement_count),
         tableCell(role === "buyer" ? row.counterparties_count : row.counterparties_count),
         tableCell(valueSummaryNode(row.observed_value)), tableCell(formatTime(row.latest_activity))
       ]));
       $("#entity-count").textContent = `${filtered.length} ${role} entit${filtered.length === 1 ? "y" : "ies"}`;
+      pager.update(page); sort.update();
     };
-    search.addEventListener("input", draw);
+    search.addEventListener("input", () => { pager.page = 1; draw(); });
+    $("#entities-export").addEventListener("click", () => downloadCsv(`${role}s.csv`, [["Entity ID", "Name", "Role", "Procurement count", "Linked counterparties", "Observed values by currency", "Latest activity"],
+      ...filteredForExport.map(row => [row.entity.id, row.entity.name, role, row.procurement_count, row.counterparties_count, row.observed_value.currencies.map(item => `${item.currency} ${item.total}`).join("; "), row.latest_activity])]));
     draw();
   }
 
@@ -635,7 +753,9 @@
 
   async function main() {
     await loadBase();
+    setupUniversalSearch();
     const page = document.body.dataset.page;
+    setupBreadcrumbs(page);
     if (page === "index") renderIndex();
     if (page === "changes") renderChanges();
     if (page === "contracts") renderContracts();

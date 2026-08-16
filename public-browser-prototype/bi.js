@@ -189,6 +189,69 @@
     return "Awaiting coverage";
   }
 
+  function searchableText(values) {
+    return (values || []).flat(Infinity).filter(value => value != null)
+      .map(value => String(value).toLocaleLowerCase()).join(" ");
+  }
+
+  function tokenMatch(values, query) {
+    const haystack = searchableText(values);
+    const tokens = String(query || "").trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    return tokens.every(token => haystack.includes(token));
+  }
+
+  function universalSearch(records, entities, query, limit = 8) {
+    const q = String(query || "").trim();
+    if (!q) return {contracts: [], buyers: [], suppliers: []};
+    const contracts = distinctById(records).filter(record => tokenMatch([
+      record.title, record.id, record.source?.source_record_id, record.buyer?.name,
+      record.buyer?.id, partyEntries(record, "supplier").flatMap(p => [p.name, p.id])
+    ], q)).slice(0, limit);
+    const matching = (entities || []).filter(entity => tokenMatch([entity.name, entity.id], q));
+    return {
+      contracts,
+      buyers: matching.filter(entity => entity.role === "buyer").slice(0, limit),
+      suppliers: matching.filter(entity => entity.role === "supplier").slice(0, limit)
+    };
+  }
+
+  function compareValues(left, right, type = "text", direction = "asc") {
+    const missingLeft = left == null || left === "" || (type === "date" && !Number.isFinite(Date.parse(left)));
+    const missingRight = right == null || right === "" || (type === "date" && !Number.isFinite(Date.parse(right)));
+    // Unknown values remain last in either direction; this is easier to audit.
+    if (missingLeft || missingRight) return missingLeft === missingRight ? 0 : missingLeft ? 1 : -1;
+    let result;
+    if (type === "number") result = Number(left) - Number(right);
+    else if (type === "date") result = Date.parse(left) - Date.parse(right);
+    else result = String(left).localeCompare(String(right), "en", {numeric: true, sensitivity: "base"});
+    return direction === "desc" ? -result : result;
+  }
+
+  function stableSort(items, accessor, type = "text", direction = "asc") {
+    return (items || []).map((item, index) => ({item, index})).sort((a, b) =>
+      compareValues(accessor(a.item), accessor(b.item), type, direction) || a.index - b.index
+    ).map(entry => entry.item);
+  }
+
+  function paginate(items, page = 1, pageSize = 25) {
+    const size = [25, 50, 100].includes(Number(pageSize)) ? Number(pageSize) : 25;
+    const pages = Math.max(1, Math.ceil((items || []).length / size));
+    const current = Math.min(Math.max(1, Number(page) || 1), pages);
+    return {items: (items || []).slice((current - 1) * size, current * size), page: current,
+      page_size: size, page_count: pages, total: (items || []).length};
+  }
+
+  function csvSafeCell(value) {
+    if (value == null) return "";
+    const string = String(value);
+    return /^[=+\-@]/.test(string) ? `'${string}` : string;
+  }
+
+  function csvEncode(rows) {
+    const quote = value => `"${csvSafeCell(value).replace(/"/g, '""')}"`;
+    return "\ufeff" + (rows || []).map(row => row.map(quote).join(",")).join("\r\n") + "\r\n";
+  }
+
   return {
     RECORD_FIELD_EVENTS,
     isBusinessIntelligenceTarget,
@@ -212,6 +275,14 @@
     recordsForEntity,
     rankedEntities,
     categoryCoverage,
-    timestampStatusText
+    timestampStatusText,
+    searchableText,
+    tokenMatch,
+    universalSearch,
+    compareValues,
+    stableSort,
+    paginate,
+    csvSafeCell,
+    csvEncode
   };
 }));
