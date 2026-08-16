@@ -105,6 +105,11 @@ python3 -m pip install -e 'tools/kibitzr-archive[test]'
 python3 -m pytest tools/kibitzr-archive/tests -q
 ```
 
+For this checkout, the canonical root command is
+`../.venv/bin/python -m pytest tools/kibitzr-archive/tests -q`; the package is
+already installed editable in that project venv. A bare `pytest` is not assumed
+to exist on `PATH`, and no root `pythonpath` override is required.
+
 See [`tools/kibitzr-archive/README.md`](tools/kibitzr-archive/README.md) for the
 data model and CLI, [`deploy/README.md`](deploy/README.md) for operation and
 backup, and [`deploy/VERIFYING.md`](deploy/VERIFYING.md) for the verification
