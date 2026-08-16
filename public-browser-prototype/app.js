@@ -127,6 +127,14 @@
     $("header").before(crumbs);
   }
 
+  function setupNavigation() {
+    for (const anchor of document.querySelectorAll("header nav a")) {
+      const href = anchor.getAttribute("href");
+      if (href === "./changes.html") anchor.textContent = "Recent activity";
+      if (href === "./#sources") { anchor.textContent = "Sources / evidence"; anchor.classList.add("secondary"); }
+    }
+  }
+
   async function getJson(name) {
     const response = await fetch(`${ROOT}/${name}`, {cache: "no-store"});
     if (!response.ok) throw new Error(`Could not load ${name}`);
@@ -753,6 +761,7 @@
 
   async function main() {
     await loadBase();
+    setupNavigation();
     setupUniversalSearch();
     const page = document.body.dataset.page;
     setupBreadcrumbs(page);
