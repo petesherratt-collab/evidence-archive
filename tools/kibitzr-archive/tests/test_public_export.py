@@ -3,6 +3,9 @@
 import gzip
 import hashlib
 import json
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -207,3 +210,83 @@ def test_public_browser_uses_text_nodes_and_does_not_interpolate_html(tmp_path):
     assert "innerHTML" not in source
     assert "createTextNode" in source
     assert "textContent" in source
+
+
+def _run_independent_verifier(archive, output):
+    script = Path(__file__).resolve().parents[3] / "deploy" / "verify_public_export_independently.py"
+    return subprocess.run([sys.executable, str(script), str(archive), str(output)],
+                          capture_output=True, text=True, check=False)
+
+
+def _rehash_manifest(output, relative):
+    path = output / relative
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    entry = next(item for item in manifest["files"] if item["path"] == relative)
+    entry["bytes"] = path.stat().st_size
+    entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=True, sort_keys=True,
+                                        separators=(",", ":")) + "\n")
+
+
+def test_independent_public_export_verifier_rejects_corruption(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    before = _release()
+    _observe(store, before, "2026-01-01T12:00:00+00:00", before)
+    after = _release(amount=125, supplier="Supplier Two")
+    _observe(store, after, "2026-01-02T12:00:00+00:00", after)
+    output = _build(store, tmp_path)
+    clean = _run_independent_verifier(store.root, output)
+    assert clean.returncode == 0, clean.stderr
+
+    hash_copy = Path(shutil.copytree(output, tmp_path / "bad-hash"))
+    (hash_copy / "records.json").write_bytes((hash_copy / "records.json").read_bytes() + b" ")
+    assert _run_independent_verifier(store.root, hash_copy).returncode != 0
+
+    value_copy = Path(shutil.copytree(output, tmp_path / "bad-value"))
+    payload = json.loads((value_copy / "records.json").read_text())
+    payload["records"][0]["value"]["amount"] = 999999
+    (value_copy / "records.json").write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+    _rehash_manifest(value_copy, "records.json")
+    assert _run_independent_verifier(store.root, value_copy).returncode != 0
+
+    entity_copy = Path(shutil.copytree(output, tmp_path / "bad-entity"))
+    payload = json.loads((entity_copy / "entities.json").read_text())
+    payload["entities"][0]["record_ids"] = []
+    (entity_copy / "entities.json").write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+    _rehash_manifest(entity_copy, "entities.json")
+    assert _run_independent_verifier(store.root, entity_copy).returncode != 0
+
+    control_copy = Path(shutil.copytree(output, tmp_path / "bad-control"))
+    payload = json.loads((control_copy / "sources.json").read_text())
+    payload["sources"][0]["kind"] = "control"
+    (control_copy / "sources.json").write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
+    _rehash_manifest(control_copy, "sources.json")
+    assert _run_independent_verifier(store.root, control_copy).returncode != 0
+
+
+def test_ci_fixture_is_deterministic_and_independently_verified(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    first = _release(amount=100)
+    _observe(store, first, "2026-01-01T12:00:00+00:00", first)
+    second = _release(amount=125)
+    _observe(store, second, "2026-01-02T12:00:00+00:00", second)
+    control_name = "Fixture collector control"
+    store.declare_control(control_name, {"source": "fixture"})
+    control = store.record_poll(control_name, url="https://example.invalid/control",
+                                content=b'{"sequence":1}',
+                                polled_at="2026-01-02T12:05:00+00:00")
+    store.record_normalisation(control_name, b"stable", transform_conf=["text"],
+                               poll_id=control.poll_id,
+                               recorded_at="2026-01-02T12:05:00+00:00")
+    left = build_export(store.root, tmp_path / "fixture-left")
+    right = build_export(store.root, tmp_path / "fixture-right")
+    left_hashes = {path.relative_to(left).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                   for path in left.rglob("*.json")}
+    right_hashes = {path.relative_to(right).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in right.rglob("*.json")}
+    assert left_hashes == right_hashes
+    assert _run_independent_verifier(store.root, left).returncode == 0
+    manifest = json.loads((left / "manifest.json").read_text())
+    assert manifest["target_count"] == 2
+    assert manifest["summary"]["control_checks"] == 1
