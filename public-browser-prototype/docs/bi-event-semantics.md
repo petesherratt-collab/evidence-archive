@@ -1,9 +1,11 @@
 # Public event semantics
 
 The export contains two different kinds of activity. The exporter records
-source-level evidence movement and record-level procurement movement in one
-`changes.json` stream. The stream is therefore an event log, not a count of
-procurements and not a count of publisher-side changes.
+source-level evidence movement and record-level procurement movement for the
+five intelligence targets in one `changes.json` stream. Control observations
+remain available in their source/observation section, but control events do
+not enter the BI event stream. The stream is therefore an event log, not a
+count of procurements and not a count of publisher-side changes.
 
 The public browser uses the existing exported target metadata as its explicit
 classification boundary:
@@ -29,12 +31,8 @@ operational section but cannot enter business-intelligence aggregates.
 | `content_changed` | The normalised document digest differed from the prior successful observation. | One source observation comparison | Source-level event |
 
 `recorded_change_count` in `sources.json` follows the exporter’s existing
-definition: it counts all events except `first_seen`. In this snapshot the
-1,958 government total is consequently a mixture of 144 raw-response events,
-68 normalised-document events, 1,740 disappeared-record events, and 6
-record-level field events. The control contributes 70 raw-response events and
-71 normalised-document events, for 141 additional events. It contains no
-procurement record IDs.
+definition: it counts public events except `first_seen`. Control observations
+have no procurement record IDs and contribute no public BI events.
 
 ## Public terminology
 
@@ -46,9 +44,9 @@ which are shown with their exact deterministic event type. This avoids calling
 collector polling or source-digest movement procurement activity.
 
 The Activity page retains the complete deterministic event stream for
-government sources and can optionally show the control target. Source-level
-events remain labelled as source/evidence events and do not receive a
-procurement record link.
+government sources. Source-level events remain labelled as source/evidence
+events and do not receive a procurement record link. The control target is
+shown through the separate operational source/observation section.
 
 ## Stable identities and limitations
 
