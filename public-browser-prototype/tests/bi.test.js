@@ -105,3 +105,34 @@ test("CSV is UTF-8, quoted, newline-safe, and neutralises spreadsheet formulas",
   assert.match(csv, /"'@x"/);
   assert.match(csv, /"comma, quote "" and\nnewline"/);
 });
+
+test("CSV protects formulas after whitespace and control prefixes", () => {
+  const unsafe = [
+    "=2+2", "+2", "-2", "@SUM(A1:A2)",
+    " =2+2", "   =2+2", "\t=2+2", "\r=2+2", "\n=2+2",
+    " \t\r\n@SUM(A1:A2)", "\u2003=2+2", "\u0000=2+2"
+  ];
+  for (const value of unsafe) {
+    assert.equal(BI.sanitizeCSVCell(value), `'${value}`, value);
+  }
+  for (const value of [
+    "ordinary text", "ACME + Partners", "£-100", "Contract = framework"
+  ]) {
+    assert.equal(BI.sanitizeCSVCell(value), value, value);
+  }
+});
+
+test("CSV keeps quoting, UTF-8, embedded newlines, and the complete row set", () => {
+  const csv = BI.toCSV([
+    {name: "Café, Ltd", note: "line 1\nline 2", formula: "\t=2+2"},
+    {name: "Second", note: "quoted \"text\"", formula: "ACME + Partners"}
+  ], ["name", "note", "formula"]);
+  assert.equal(csv.startsWith("\ufeff"), true);
+  assert.match(csv, /Café/);
+  assert.match(csv, /"Café, Ltd"/);
+  assert.match(csv, /"line 1\nline 2"/);
+  assert.match(csv, /"quoted \"\"text\"\""/);
+  assert.match(csv, /'\t=2\+2/);
+  assert.match(csv, /Second/);
+  assert.equal(csv.endsWith("\r\n"), true);
+});

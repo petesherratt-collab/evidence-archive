@@ -823,7 +823,10 @@ def build_export(archive_root, output, *, include_control=True):
                         previous_observation = observation
                     events = sorted(events, key=lambda item: (
                         item["first_observed_at"], item["id"]))
-                    all_events.extend(events)
+                    # Operational controls remain in the observation/source
+                    # section, but never enter the public BI event stream.
+                    if not is_control:
+                        all_events.extend(events)
                     events = []
                 for record_id, record in all_records.items():
                     if record["source"]["target_id"] != source_id:
