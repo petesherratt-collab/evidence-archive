@@ -182,6 +182,51 @@
       coverage: unique.length ? withCPV / unique.length : 0};
   }
 
+  // CSV is a presentation boundary. Keep the JSON value and all browser
+  // display values unchanged; only the cell written to a spreadsheet gets
+  // this protection. Unicode White_Space plus C0/C1 controls are skipped when
+  // finding the first significant character, so a formula cannot hide behind
+  // a space, tab, line break, or other leading control character.
+  const CSV_LEADING_SPACE_OR_CONTROL = /^[\p{White_Space}\p{Cc}]*/u;
+  const CSV_FORMULA_START = /^[=+\-@]/;
+
+  function sanitizeCSVCell(value) {
+    const text = value == null ? "" : String(value);
+    const significant = text.replace(CSV_LEADING_SPACE_OR_CONTROL, "");
+    return CSV_FORMULA_START.test(significant) ? `'${text}` : text;
+  }
+
+  function csvEscape(value) {
+    const text = sanitizeCSVCell(value);
+    return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  }
+
+  function toCSV(rows, columns) {
+    const data = Array.isArray(rows) ? rows : [];
+    let descriptors = Array.isArray(columns) ? columns : null;
+    if (!descriptors) {
+      const keys = [];
+      for (const row of data) {
+        if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+        for (const key of Object.keys(row)) if (!keys.includes(key)) keys.push(key);
+      }
+      descriptors = keys;
+    }
+    descriptors = descriptors.map(column => {
+      if (typeof column === "string") return {key: column, label: column};
+      if (typeof column === "function") return {get: column, label: ""};
+      return {key: column?.key, get: column?.get, label: column?.label ?? column?.key ?? ""};
+    });
+    const values = data.map(row => descriptors.map(column => {
+      if (column.get) return column.get(row);
+      if (Array.isArray(row)) return row[column.key];
+      return row?.[column.key];
+    }));
+    const lines = [descriptors.map(column => csvEscape(column.label)).join(",")];
+    for (const row of values) lines.push(row.map(csvEscape).join(","));
+    return `\ufeff${lines.join("\r\n")}\r\n`;
+  }
+
   function timestampStatusText(status) {
     if (status === "bitcoin-backed") return "Bitcoin-backed";
     if (status === "pending") return "Pending — not Bitcoin-backed";
@@ -212,6 +257,11 @@
     recordsForEntity,
     rankedEntities,
     categoryCoverage,
+    sanitizeCSVCell,
+    csvSafeCell: sanitizeCSVCell,
+    csvEscape,
+    toCSV,
+    recordsToCSV: toCSV,
     timestampStatusText
   };
 }));
