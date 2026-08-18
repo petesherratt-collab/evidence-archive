@@ -9,6 +9,7 @@ necessary, but they are not a completeness proof: the archive-derived sets
 below are the authority for that claim.
 
     python3 deploy/verify_public_export_independently.py ARCHIVE EXPORT
+    python3 deploy/verify_public_export_independently.py --historical ARCHIVE EXPORT
 """
 
 from __future__ import annotations
@@ -159,6 +160,24 @@ class Archive:
         return body
 
 
+LEGACY_CONTROL_EVENT_EXPORT_ID = (
+    "export-adc53ae73a759cd128df9575be0cb759"
+)
+
+
+class HistoricalCut:
+    """Authenticated archive boundary derived from a published snapshot."""
+    def __init__(
+            self, poll_ids, norm_ids, annotation_id, generated_at,
+            legacy_control_events=False):
+        self.poll_ids = dict(poll_ids)
+        self.norm_ids = dict(norm_ids)
+        self.annotation_id = annotation_id
+        self.generated_at = generated_at
+        self.legacy_control_events = bool(legacy_control_events)
+        self.max_poll_id = max(self.poll_ids.values())
+
+
 def chain_hash(fields, previous, version=1):
     return sha256(chain_json(dict(fields, v=version, prev=previous)))
 
@@ -257,7 +276,8 @@ def ots_committed_digest(raw):
     return digest.hex() if len(digest) == length else None
 
 
-def anchor_state(archive, poll, poll_hashes, norm_hashes, annotation_hashes):
+def anchor_state(archive, poll, poll_hashes, norm_hashes, annotation_hashes,
+                 cut=None):
     """Rebuild the conservative observation anchor state independently."""
     candidates = []
     invalid = False
@@ -267,6 +287,14 @@ def anchor_state(archive, poll, poll_hashes, norm_hashes, annotation_hashes):
         row = dict(row)
         if row["status"] == "failed" or not row.get("proof_ref"):
             continue
+        if cut is not None:
+            if (row.get("last_poll_id") is None
+                    or row["last_poll_id"] > cut.poll_ids[poll["check_name"]]):
+                continue
+            anchored_at = parse_time(row.get("anchored_at"))
+            cut_at = parse_time(cut.generated_at)
+            if anchored_at is None or cut_at is None or anchored_at > cut_at:
+                continue
         manifest_path = archive.root / row["manifest_ref"]
         proof_path = archive.root / row["proof_ref"]
         if not manifest_path.is_file() or not proof_path.is_file():
@@ -491,10 +519,180 @@ def previous_norm_digest(rows, row_id):
     return prior[-1]["content_sha256"] if prior else None
 
 
-def build_projection(archive, errors):
-    polls = archive.rows("poll")
-    norms = archive.rows("normalisation")
-    annotations = archive.rows("annotation")
+def _rows_for_cut(rows, cut, limits):
+    if cut is None:
+        return rows
+    return [row for row in rows
+            if row["id"] <= limits.get(row["check_name"], -1)]
+
+
+def _annotations_for_cut(rows, cut):
+    if cut is None:
+        return rows
+    return [row for row in rows if row["id"] <= cut.annotation_id]
+
+
+def authenticate_chain_prefix(rows, fields, head, label, errors):
+    """Find a named head and verify every chain row up to it.
+
+    Rows after the named head are deliberately outside this operation.  A
+    historical verifier must prove the prefix before it is allowed to ignore
+    later archive rows; ordinary verification still rebuilds the entire live
+    chain through ``build_projection``.
+    """
+    if head == GENESIS:
+        return None
+    matches = [row for row in rows if row.get("record_hash") == head]
+    if len(matches) != 1:
+        if not matches:
+            errors.append(f"{label} head is not present in the live archive")
+        else:
+            errors.append(f"{label} head is not unique in the live archive")
+        return None
+    row = matches[0]
+    prefix = [item for item in rows if item["id"] <= row["id"]]
+    _hashes, recomputed = rebuild_chain(prefix, fields, label, errors)
+    if recomputed != head:
+        errors.append(f"{label} head does not match the authenticated prefix")
+    return row
+
+
+def derive_historical_cut(archive, manifest, errors):
+    """Derive a cut exclusively from chain heads published in the snapshot."""
+    if not isinstance(manifest, dict):
+        errors.append("manifest.json is required for historical verification")
+        return None
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        errors.append("manifest.json has unsupported schema for historical verification")
+    entries = manifest.get("per_target_chain_heads")
+    if not isinstance(entries, list) or not entries:
+        errors.append("manifest.per_target_chain_heads is required for historical verification")
+        return None
+
+    polls_all = archive.rows("poll")
+    norms_all = archive.rows("normalisation")
+    annotations_all = archive.rows("annotation")
+    by_check = defaultdict(list)
+    for row in polls_all:
+        by_check[row["check_name"]].append(row)
+    known_checks = {
+        check_name for check_name in by_check
+        if check_name in SOURCE_DEFINITIONS or is_control(check_name, annotations_all)
+    }
+    target_map = {}
+    poll_ids = {}
+    norm_ids = {}
+    seen_targets = set()
+    annotation_heads = set()
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            errors.append("manifest.per_target_chain_heads contains a non-object")
+            continue
+        target_id = entry.get("target_id")
+        if not isinstance(target_id, str) or not target_id:
+            errors.append("historical chain head has no target_id")
+            continue
+        if target_id in seen_targets:
+            errors.append(f"duplicated historical target chain head: {target_id}")
+            continue
+        seen_targets.add(target_id)
+        candidates = [check_name for check_name in known_checks
+                      if slug(check_name) == target_id]
+        if len(candidates) != 1:
+            errors.append(f"historical target is not an eligible live check: {target_id}")
+            continue
+        check_name = candidates[0]
+        target_map[target_id] = check_name
+        poll_head = entry.get("poll")
+        norm_head = entry.get("normalisation")
+        annotation_head = entry.get("annotation")
+        for label, value in (("poll", poll_head),
+                             ("normalisation", norm_head),
+                             ("annotation", annotation_head)):
+            if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+                errors.append(f"historical {target_id} {label} head is not a SHA-256 digest")
+        if not all(isinstance(value, str) and SHA256_RE.fullmatch(value)
+                   for value in (poll_head, norm_head, annotation_head)):
+            continue
+        annotation_heads.add(annotation_head)
+
+        poll_row = authenticate_chain_prefix(
+            by_check[check_name], poll_fields, poll_head,
+            f"poll[{check_name}]", errors)
+        if poll_row is None:
+            continue
+        poll_ids[check_name] = poll_row["id"]
+
+        norm_rows = [row for row in norms_all if row["check_name"] == check_name]
+        norm_row = authenticate_chain_prefix(
+            norm_rows, normalisation_fields, norm_head,
+            f"normalisation[{check_name}]", errors)
+        if norm_head == GENESIS:
+            if any(row.get("poll_id") is not None
+                   and row["poll_id"] <= poll_row["id"] for row in norm_rows):
+                errors.append(
+                    f"normalisation[{check_name}] claims an empty authenticated prefix"
+                    " despite eligible rows before its poll head")
+        elif norm_row is not None:
+            if norm_row.get("poll_id") is None or norm_row["poll_id"] > poll_row["id"]:
+                errors.append(
+                    f"normalisation[{check_name}] head is beyond its authenticated poll state")
+            norm_ids[check_name] = norm_row["id"]
+
+    if len(annotation_heads) != 1:
+        errors.append("historical target chain heads do not agree on annotation head")
+        annotation_id = 0
+    else:
+        annotation_head = next(iter(annotation_heads))
+        annotation_row = authenticate_chain_prefix(
+            annotations_all, annotation_fields, annotation_head,
+            "annotation", errors)
+        if annotation_head == GENESIS:
+            annotation_id = 0
+        elif annotation_row is not None:
+            annotation_id = annotation_row["id"]
+        else:
+            annotation_id = 0
+
+    if not poll_ids:
+        errors.append("historical verification found no authenticated poll heads")
+        return None
+    max_poll_id = max(poll_ids.values())
+    for check_name in sorted(known_checks):
+        if any(row["id"] <= max_poll_id for row in by_check[check_name]) \
+                and check_name not in poll_ids:
+            errors.append(
+                f"historical snapshot omits the chain head for eligible check {check_name}")
+
+    selected_polls = [row for check_name, limit in poll_ids.items()
+                      for row in by_check[check_name] if row["id"] <= limit]
+    generated_at = max_time([row["polled_at"] for row in selected_polls])
+    if generated_at is None:
+        errors.append("historical authenticated state has no valid poll timestamp")
+        return None
+    manifest_generated_at = manifest.get("generated_at")
+    if parse_time(manifest_generated_at) is None:
+        errors.append("manifest.generated_at is not a valid timestamp")
+    elif manifest_generated_at != generated_at:
+        errors.append(
+            "manifest.generated_at does not match the authenticated historical state")
+    return HistoricalCut(
+        poll_ids,
+        norm_ids,
+        annotation_id,
+        generated_at,
+        manifest.get("export_id") == LEGACY_CONTROL_EVENT_EXPORT_ID,
+    )
+
+
+def build_projection(archive, errors, cut=None):
+    all_polls = archive.rows("poll")
+    all_norms = archive.rows("normalisation")
+    all_annotations = archive.rows("annotation")
+    polls = _rows_for_cut(all_polls, cut, cut.poll_ids if cut else {})
+    norms = _rows_for_cut(all_norms, cut, cut.norm_ids if cut else {})
+    annotations = _annotations_for_cut(all_annotations, cut)
     if not polls:
         errors.append("archive contains no poll rows")
         return None
@@ -600,46 +798,65 @@ def build_projection(archive, errors):
                           "head_sha256": poll_hashes[check_name][poll["id"]]},
                 "anchor": anchor_state(
                     archive, poll, poll_hashes[check_name],
-                    norm_hashes[check_name].values(), annotation_hashes.values()),
+                    norm_hashes[check_name].values(), annotation_hashes.values(),
+                    cut),
             }
             observations.append(observation)
 
+            legacy_control_events = bool(
+                cut and cut.legacy_control_events
+            )
+
             local_events = []
-            if not control and previous_observation and poll["ok"] and digest:
-                if digest != previous_digest:
-                    local_events.append(event(
-                        source_id, observation_id, previous_observation["id"],
-                        poll["polled_at"], "raw_response_changed", {
-                            "mode": "raw_response", "old": previous_digest,
-                            "new": digest}))
-                prior_norm = previous_norm_digest(
-                    norm_by_check[check_name], norm["id"]) if norm else None
-                if norm and norm["changed"] and prior_norm:
-                    local_events.append(event(
-                        source_id, observation_id, previous_observation["id"],
-                        poll["polled_at"], "content_changed", {
-                            "mode": "normalised_document", "old": prior_norm,
-                            "new": norm["content_sha256"]}))
-                for record_id in sorted(set(previous_records) | set(current_records)):
-                    old = previous_records.get(record_id)
-                    new = current_records.get(record_id)
-                    if old is not None and new is None:
+            if previous_observation and poll["ok"] and digest:
+                if not control or legacy_control_events:
+                    if digest != previous_digest:
                         local_events.append(event(
-                            source_id, observation_id, previous_observation["id"],
-                            poll["polled_at"], "disappeared", {
-                                "mode": "structured_record",
-                                "interpretation": "record absent from a later deterministic source projection; not evidence of withdrawal",
-                                "old": old, "new": None}, record_id,
-                            old.get("title")))
-                        record_change_times[record_id].append(poll["polled_at"])
-                    elif old is not None and new is not None:
-                        for event_type, comparison in compare_record(old, new):
+                            source_id, observation_id,
+                            previous_observation["id"],
+                            poll["polled_at"], "raw_response_changed", {
+                                "mode": "raw_response",
+                                "old": previous_digest,
+                                "new": digest}))
+                    prior_norm = previous_norm_digest(
+                        norm_by_check[check_name],
+                        norm["id"]) if norm else None
+                    if norm and norm["changed"] and prior_norm:
+                        local_events.append(event(
+                            source_id, observation_id,
+                            previous_observation["id"],
+                            poll["polled_at"], "content_changed", {
+                                "mode": "normalised_document",
+                                "old": prior_norm,
+                                "new": norm["content_sha256"]}))
+
+                if not control:
+                    for record_id in sorted(
+                            set(previous_records) | set(current_records)):
+                        old = previous_records.get(record_id)
+                        new = current_records.get(record_id)
+                        if old is not None and new is None:
                             local_events.append(event(
                                 source_id, observation_id,
-                                previous_observation["id"], poll["polled_at"],
-                                event_type, comparison, record_id,
-                                new.get("title")))
-                            record_change_times[record_id].append(poll["polled_at"])
+                                previous_observation["id"],
+                                poll["polled_at"], "disappeared", {
+                                    "mode": "structured_record",
+                                    "interpretation": "record absent from a later deterministic source projection; not evidence of withdrawal",
+                                    "old": old, "new": None}, record_id,
+                                old.get("title")))
+                            record_change_times[record_id].append(
+                                poll["polled_at"])
+                        elif old is not None and new is not None:
+                            for event_type, comparison in compare_record(
+                                    old, new):
+                                local_events.append(event(
+                                    source_id, observation_id,
+                                    previous_observation["id"],
+                                    poll["polled_at"],
+                                    event_type, comparison, record_id,
+                                    new.get("title")))
+                                record_change_times[record_id].append(
+                                    poll["polled_at"])
 
             if not control:
                 for record_id, snapshot in sorted(current_records.items()):
@@ -885,9 +1102,16 @@ def report_projection(expected):
     print(f"record activity: 24h={windows[1]} 7d={windows[7]} 30d={windows[30]}")
 
 
-def verify_export(archive_root, export_root):
+def _verify_export(archive_root, export_root, historical=False):
     errors = []
     export_root = Path(export_root).expanduser().resolve()
+
+    actual = {}
+    for filename in ("manifest.json", "sources.json", "entities.json",
+                     "records.json", "changes.json"):
+        actual[filename] = load_json(export_root / filename, errors)
+    manifest = actual.get("manifest.json")
+
     try:
         archive = Archive(archive_root)
     except (OSError, ValueError, sqlite3.Error) as exc:
@@ -895,7 +1119,10 @@ def verify_export(archive_root, export_root):
         return 1
     try:
         try:
-            expected = build_projection(archive, errors)
+            cut = (derive_historical_cut(archive, manifest, errors)
+                   if historical else None)
+            expected = (build_projection(archive, errors, cut)
+                        if cut is not None or not historical else None)
         except (OSError, ValueError, KeyError, TypeError, IndexError,
                 sqlite3.Error) as exc:
             errors.append(f"archive projection could not be reconstructed: {exc}")
@@ -907,10 +1134,6 @@ def verify_export(archive_root, export_root):
             print(f"- {error}", file=sys.stderr)
         return 1
 
-    actual = {}
-    for filename in ("manifest.json", "sources.json", "entities.json",
-                     "records.json", "changes.json"):
-        actual[filename] = load_json(export_root / filename, errors)
     actual_obs = {}
     for source_id in expected["observations"]:
         path = export_root / "observations" / f"{source_id}.json"
@@ -968,7 +1191,6 @@ def verify_export(archive_root, export_root):
                     f"records/{record_file_id(record['id'])}.json", record,
                     actual_records[f"{record_file_id(record['id'])}.json"], errors)
 
-    manifest = actual.get("manifest.json")
     files = []
     if export_root.is_dir():
         for path in sorted(export_root.rglob("*.json")):
@@ -1022,12 +1244,26 @@ def verify_export(archive_root, export_root):
     return 0
 
 
+def verify_export(archive_root, export_root):
+    """Verify a current export against the entire eligible live archive."""
+    return _verify_export(archive_root, export_root, historical=False)
+
+
+def verify_historical_export(archive_root, export_root):
+    """Verify a snapshot against its authenticated archive prefix."""
+    return _verify_export(archive_root, export_root, historical=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--historical", action="store_true",
+        help="derive and verify the archive cut from the snapshot chain heads")
     parser.add_argument("archive", help="archive root containing polls.db")
     parser.add_argument("export", help="public export directory")
     args = parser.parse_args(argv)
-    return verify_export(args.archive, args.export)
+    verifier = verify_historical_export if args.historical else verify_export
+    return verifier(args.archive, args.export)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import sqlite3
 from pathlib import Path
 
 from kibitzr_archive.public_export import build_export
@@ -54,6 +55,23 @@ def _fixture(tmp_path):
     return output
 
 
+def _historical_fixture(tmp_path):
+    store = ArchiveStore(str(tmp_path / "archive"))
+    store.record_poll("Contracts Finder — recent awards",
+                      url="https://example.invalid/feed", content=_release(100),
+                      polled_at="2026-01-01T12:00:00+00:00")
+    store.record_poll("Contracts Finder — recent awards",
+                      url="https://example.invalid/feed", content=_release(200),
+                      polled_at="2026-01-02T12:00:00+00:00")
+    snapshot = build_export(store.root, tmp_path / "snapshot")
+    store.record_poll(
+        "Contracts Finder — recent awards", url="https://example.invalid/feed",
+        content=_release(300, title="Later bridge", ocid="ocds-later"),
+        polled_at="2026-01-03T12:00:00+00:00")
+    current = build_export(store.root, tmp_path / "current")
+    return store.root, snapshot, current
+
+
 def _read(output, relative):
     return json.loads((Path(output) / relative).read_text(encoding="utf-8"))
 
@@ -96,6 +114,183 @@ def _remove_record(output, record_id):
 
 def _one_record(output):
     return _read(output, "records.json")["records"][0]
+
+
+def _historical_assertion(tmp_path, mutate=None):
+    archive, snapshot, current = _historical_fixture(tmp_path)
+    if mutate:
+        mutate(snapshot, current, archive)
+    assert VERIFIER.verify_historical_export(archive, snapshot) == 1
+
+
+def test_historical_mode_accepts_authenticated_append_only_prefix(tmp_path):
+    archive, snapshot, _current = _historical_fixture(tmp_path)
+    assert VERIFIER.verify_historical_export(archive, snapshot) == 0
+
+
+def test_current_mode_rejects_historical_snapshot_against_live_archive(tmp_path):
+    archive, snapshot, _current = _historical_fixture(tmp_path)
+    assert VERIFIER.verify_export(archive, snapshot) == 1
+
+
+def test_current_mode_accepts_entire_live_archive_export(tmp_path):
+    archive, _snapshot, current = _historical_fixture(tmp_path)
+    assert VERIFIER.verify_export(archive, current) == 0
+
+def test_historical_cut_enables_legacy_control_events_for_known_export(tmp_path):
+    archive, snapshot, _current = _historical_fixture(tmp_path)
+    manifest = _read(snapshot, "manifest.json")
+    manifest["export_id"] = VERIFIER.LEGACY_CONTROL_EVENT_EXPORT_ID
+
+    errors = []
+    cut = VERIFIER.derive_historical_cut(
+        VERIFIER.Archive(archive), manifest, errors)
+
+    assert errors == []
+    assert cut is not None
+    assert cut.legacy_control_events is True
+
+
+def test_historical_cut_does_not_enable_legacy_control_events_normally(tmp_path):
+    archive, snapshot, _current = _historical_fixture(tmp_path)
+    manifest = _read(snapshot, "manifest.json")
+
+    assert manifest["export_id"] != VERIFIER.LEGACY_CONTROL_EVENT_EXPORT_ID
+
+    errors = []
+    cut = VERIFIER.derive_historical_cut(
+        VERIFIER.Archive(archive), manifest, errors)
+
+    assert errors == []
+    assert cut is not None
+    assert cut.legacy_control_events is False
+
+
+def test_forged_legacy_export_id_does_not_bypass_verification(tmp_path):
+    archive, snapshot, _current = _historical_fixture(tmp_path)
+    manifest = _read(snapshot, "manifest.json")
+    manifest["export_id"] = VERIFIER.LEGACY_CONTROL_EVENT_EXPORT_ID
+    _write(snapshot, "manifest.json", manifest)
+
+    assert VERIFIER.verify_historical_export(archive, snapshot) == 1
+
+
+def test_historical_rejects_forged_cut_metadata(tmp_path):
+    def mutate(snapshot, current, _archive):
+        manifest = _read(snapshot, "manifest.json")
+        later_head = _read(current, "manifest.json")["per_target_chain_heads"][0]["poll"]
+        manifest["per_target_chain_heads"][0]["poll"] = later_head
+        _write(snapshot, "manifest.json", manifest)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_fake_chain_head(tmp_path):
+    def mutate(snapshot, _current, _archive):
+        manifest = _read(snapshot, "manifest.json")
+        manifest["per_target_chain_heads"][0]["poll"] = hashlib.sha256(
+            b"fake chain head").hexdigest()
+        _write(snapshot, "manifest.json", manifest)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_head_not_present_in_live_archive(tmp_path):
+    def mutate(snapshot, _current, _archive):
+        manifest = _read(snapshot, "manifest.json")
+        manifest["per_target_chain_heads"][0]["poll"] = "a" * 64
+        _write(snapshot, "manifest.json", manifest)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_missing_intermediate_poll_rows(tmp_path):
+    def mutate(_snapshot, _current, archive):
+        with sqlite3.connect(Path(archive) / "polls.db") as conn:
+            conn.execute("DELETE FROM poll WHERE id = 1")
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_broken_chain_continuity(tmp_path):
+    def mutate(_snapshot, _current, archive):
+        with sqlite3.connect(Path(archive) / "polls.db") as conn:
+            conn.execute("UPDATE poll SET prev_hash = ? WHERE id = 2",
+                         ("0" * 64,))
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_chain_head_mismatch(tmp_path):
+    def mutate(snapshot, _current, _archive):
+        manifest = _read(snapshot, "manifest.json")
+        manifest["per_target_chain_heads"][0]["annotation"] = \
+            manifest["per_target_chain_heads"][0]["poll"]
+        _write(snapshot, "manifest.json", manifest)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_snapshot_claiming_records_beyond_cut(tmp_path):
+    def mutate(snapshot, current, _archive):
+        records = _read(snapshot, "records.json")
+        snapshot_ids = {item["id"] for item in records["records"]}
+        later = next(item for item in _read(current, "records.json")["records"]
+                     if item["id"] not in snapshot_ids)
+        records["records"].append(later)
+        _write(snapshot, "records.json", records)
+        _write(snapshot, f"records/{VERIFIER.record_file_id(later['id'])}.json",
+               later)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_snapshot_omitting_record_inside_cut(tmp_path):
+    def mutate(snapshot, _current, _archive):
+        record = _one_record(snapshot)
+        _remove_record(snapshot, record["id"])
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_forged_event_inside_cut(tmp_path):
+    def mutate(snapshot, _current, _archive):
+        changes = _read(snapshot, "changes.json")
+        changes["changes"][0]["first_observed_at"] = "1999-01-01T00:00:00+00:00"
+        _write(snapshot, "changes.json", changes)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_altered_source_observation_relationship(tmp_path):
+    def mutate(snapshot, _current, _archive):
+        records = _read(snapshot, "records.json")
+        records["records"][0]["evidence"]["observation_ids"] = [
+            "contracts-finder-recent-awards:poll:999"]
+        _write(snapshot, "records.json", records)
+        record = records["records"][0]
+        _write(snapshot, f"records/{VERIFIER.record_file_id(record['id'])}.json",
+               record)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_altered_entity_relationship_set(tmp_path):
+    def mutate(snapshot, _current, _archive):
+        entities = _read(snapshot, "entities.json")
+        entities["entities"][0]["record_ids"] = []
+        _write(snapshot, "entities.json", entities)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
 
 
 def test_delete_all_records_and_resign_still_fails_completeness(tmp_path):

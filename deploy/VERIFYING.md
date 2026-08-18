@@ -218,6 +218,34 @@ re-run the check's transform over the retained response and compare against the
 - That a **pending** proof will complete. Until upgraded it depends on the
   calendar operators.
 
+## Historical public snapshot verification
+
+The independent public projection verifier has a separate historical mode:
+
+```sh
+python3 deploy/verify_public_export_independently.py --historical \
+  /path/to/live-archive /path/to/checked-in-public/evidence
+```
+
+It does not accept a poll number or an `ignore-after` boundary. The snapshot's
+`per_target_chain_heads` are the cut evidence. For every target, the verifier
+locates the published poll, normalisation, and annotation heads in the later
+live archive and rebuilds each chain from genesis through those exact rows. It
+then derives the target-specific poll limits, the normalisation limits, the
+global annotation limit, and the generated timestamp from those authenticated
+rows.
+
+Only after that proof does it reconstruct observations, records, entities,
+relationships, and events from the historical prefixes and compare every
+published JSON object, relationship, file, count, and manifest identity. Rows
+after the authenticated heads are outside that historical reconstruction; they
+remain in scope for ordinary verification, which always means the entire
+eligible live archive.
+
+This mode proves the snapshot is complete for its authenticated state. It does
+not prove that collection was continuous before or after that state, and a
+pending `.ots` file remains pending rather than Bitcoin proof.
+
 ## Reporting a discrepancy
 
 If a chain does not verify, or a manifest does not match its proof, that is
