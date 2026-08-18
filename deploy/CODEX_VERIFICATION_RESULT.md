@@ -105,7 +105,3 @@ Command:
 python3 deploy/verify_public_export_independently.py --historical \
   /home/peter/evidence-collection/archive \
   public-browser-prototype/public/evidence
-tests passed against the same data.
-
-Pending `.ots` files are not treated as Bitcoin proof. Production promotion
-was not performed.
