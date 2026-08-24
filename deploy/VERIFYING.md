@@ -238,9 +238,15 @@ rows.
 Only after that proof does it reconstruct observations, records, entities,
 relationships, and events from the historical prefixes and compare every
 published JSON object, relationship, file, count, and manifest identity. Rows
-after the authenticated heads are outside that historical reconstruction; they
-remain in scope for ordinary verification, which always means the entire
-eligible live archive.
+after the authenticated heads are outside that historical reconstruction, but
+their chain links are still checked as append-only continuation. They remain in
+scope for ordinary verification, which always means the entire eligible live
+archive.
+
+This proves a valid historical prefix/state, not that the snapshot was
+published at that time. Publication-time proof requires an external commitment
+such as suitable Git provenance, an independently retained backup, or verified
+OpenTimestamps/Bitcoin attestation.
 
 This mode proves the snapshot is complete for its authenticated state. It does
 not prove that collection was continuous before or after that state, and a

@@ -168,12 +168,18 @@ LEGACY_CONTROL_EVENT_EXPORT_ID = (
 class HistoricalCut:
     """Authenticated archive boundary derived from a published snapshot."""
     def __init__(
-            self, poll_ids, norm_ids, annotation_id, generated_at,
-            legacy_control_events=False):
+            self, poll_ids, norm_ids, annotation_id, annotation_head,
+            collector_id, generated_at, archive_latest_poll,
+            later_poll_count, selected_poll_count, legacy_control_events=False):
         self.poll_ids = dict(poll_ids)
         self.norm_ids = dict(norm_ids)
         self.annotation_id = annotation_id
+        self.annotation_head = annotation_head
+        self.collector_id = collector_id
         self.generated_at = generated_at
+        self.archive_latest_poll = archive_latest_poll
+        self.later_poll_count = later_poll_count
+        self.selected_poll_count = selected_poll_count
         self.legacy_control_events = bool(legacy_control_events)
         self.max_poll_id = max(self.poll_ids.values())
 
@@ -557,7 +563,70 @@ def authenticate_chain_prefix(rows, fields, head, label, errors):
     return row
 
 
-def derive_historical_cut(archive, manifest, errors):
+def validate_chain_suffix(rows, fields, previous, label, errors):
+    """Validate the rows appended after an already authenticated head."""
+    for row in rows:
+        expected = chain_hash(fields(row), previous)
+        if row.get("prev_hash") != previous:
+            errors.append(f"{label} row {row['id']} has an invalid previous hash")
+        if row.get("record_hash") != expected:
+            errors.append(f"{label} row {row['id']} has an invalid record hash")
+        previous = expected
+    return previous
+
+
+def _observation_poll_id(observation_id, target_id):
+    prefix = f"{target_id}:poll:"
+    if not isinstance(observation_id, str) or not observation_id.startswith(prefix):
+        return None
+    try:
+        return int(observation_id[len(prefix):])
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_exported_observation_heads(exported_observations, entries,
+                                        target_rows, errors):
+    """Use the published observation tails as additional cut evidence."""
+    if exported_observations is None:
+        return
+    entry_targets = {entry.get("target_id") for entry in entries
+                     if isinstance(entry, dict)}
+    if set(exported_observations) != entry_targets:
+        missing = sorted(entry_targets - set(exported_observations))
+        extra = sorted(set(exported_observations) - entry_targets)
+        if missing:
+            errors.append("historical export is missing observation files for: "
+                          + ", ".join(missing))
+        if extra:
+            errors.append("historical export has unexpected observation files for: "
+                          + ", ".join(extra))
+
+    for target_id, poll_row, poll_head in target_rows:
+        payload = exported_observations.get(target_id)
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("target_id") != target_id:
+            errors.append(f"historical observations for {target_id} have the wrong target")
+        observations = payload.get("observations")
+        if not isinstance(observations, list) or not observations:
+            errors.append(f"historical observations for {target_id} are empty")
+            continue
+        final = observations[-1]
+        final_id = final.get("id") if isinstance(final, dict) else None
+        final_poll_id = _observation_poll_id(final_id, target_id)
+        if final_poll_id != poll_row["id"]:
+            errors.append(
+                f"historical {target_id} observation tail does not name its poll head")
+        if isinstance(final, dict):
+            chain = final.get("chain") or {}
+            if chain.get("entry_sha256") != poll_head:
+                errors.append(
+                    f"historical {target_id} observation tail does not carry its poll head")
+
+
+def derive_historical_cut(archive, manifest, errors,
+                          exported_observations=None):
     """Derive a cut exclusively from chain heads published in the snapshot."""
     if not isinstance(manifest, dict):
         errors.append("manifest.json is required for historical verification")
@@ -569,21 +638,57 @@ def derive_historical_cut(archive, manifest, errors):
         errors.append("manifest.per_target_chain_heads is required for historical verification")
         return None
 
+    export_id = manifest.get("export_id")
+    if not isinstance(export_id, str) or not re.fullmatch(
+            r"export-[0-9a-f]{32}", export_id):
+        errors.append("manifest.export_id is not a valid historical export identity")
+
     polls_all = archive.rows("poll")
     norms_all = archive.rows("normalisation")
     annotations_all = archive.rows("annotation")
     by_check = defaultdict(list)
     for row in polls_all:
         by_check[row["check_name"]].append(row)
+
+    # Authenticate the global annotation head before using annotations to
+    # decide which non-source poll series are controls.  A control declaration
+    # appended after the historical head must not retroactively make an older
+    # unsupported series eligible.
+    entries = manifest.get("per_target_chain_heads")
+    annotation_heads = {
+        entry.get("annotation") for entry in entries
+        if isinstance(entry, dict)
+        and isinstance(entry.get("annotation"), str)
+        and SHA256_RE.fullmatch(entry.get("annotation"))
+    }
+    annotation_head = next(iter(annotation_heads), None)
+    if len(annotation_heads) != 1:
+        errors.append("historical target chain heads do not agree on annotation head")
+        annotation_id = 0
+        annotation_prefix = []
+    else:
+        annotation_row = authenticate_chain_prefix(
+            annotations_all, annotation_fields, annotation_head,
+            "annotation", errors)
+        annotation_id = (annotation_row["id"]
+                         if annotation_row is not None else 0)
+        annotation_prefix = [row for row in annotations_all
+                             if row["id"] <= annotation_id]
+        if annotation_head == GENESIS:
+            annotation_prefix = []
+        validate_chain_suffix(
+            [row for row in annotations_all if row["id"] > annotation_id],
+            annotation_fields, annotation_head if annotation_head else GENESIS,
+            "annotation", errors)
+
     known_checks = {
         check_name for check_name in by_check
-        if check_name in SOURCE_DEFINITIONS or is_control(check_name, annotations_all)
+        if check_name in SOURCE_DEFINITIONS or is_control(check_name, annotation_prefix)
     }
-    target_map = {}
     poll_ids = {}
     norm_ids = {}
     seen_targets = set()
-    annotation_heads = set()
+    target_rows = []
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -603,19 +708,20 @@ def derive_historical_cut(archive, manifest, errors):
             errors.append(f"historical target is not an eligible live check: {target_id}")
             continue
         check_name = candidates[0]
-        target_map[target_id] = check_name
         poll_head = entry.get("poll")
         norm_head = entry.get("normalisation")
-        annotation_head = entry.get("annotation")
+        entry_annotation_head = entry.get("annotation")
         for label, value in (("poll", poll_head),
                              ("normalisation", norm_head),
-                             ("annotation", annotation_head)):
+                             ("annotation", entry_annotation_head)):
             if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
                 errors.append(f"historical {target_id} {label} head is not a SHA-256 digest")
         if not all(isinstance(value, str) and SHA256_RE.fullmatch(value)
-                   for value in (poll_head, norm_head, annotation_head)):
+                   for value in (poll_head, norm_head, entry_annotation_head)):
             continue
-        annotation_heads.add(annotation_head)
+        if entry_annotation_head != annotation_head:
+            errors.append(
+                f"historical {target_id} annotation head differs from the global head")
 
         poll_row = authenticate_chain_prefix(
             by_check[check_name], poll_fields, poll_head,
@@ -623,6 +729,7 @@ def derive_historical_cut(archive, manifest, errors):
         if poll_row is None:
             continue
         poll_ids[check_name] = poll_row["id"]
+        target_rows.append((target_id, poll_row, poll_head))
 
         norm_rows = [row for row in norms_all if row["check_name"] == check_name]
         norm_row = authenticate_chain_prefix(
@@ -640,30 +747,67 @@ def derive_historical_cut(archive, manifest, errors):
                     f"normalisation[{check_name}] head is beyond its authenticated poll state")
             norm_ids[check_name] = norm_row["id"]
 
-    if len(annotation_heads) != 1:
-        errors.append("historical target chain heads do not agree on annotation head")
-        annotation_id = 0
-    else:
-        annotation_head = next(iter(annotation_heads))
-        annotation_row = authenticate_chain_prefix(
-            annotations_all, annotation_fields, annotation_head,
-            "annotation", errors)
-        if annotation_head == GENESIS:
-            annotation_id = 0
-        elif annotation_row is not None:
-            annotation_id = annotation_row["id"]
-        else:
-            annotation_id = 0
-
     if not poll_ids:
         errors.append("historical verification found no authenticated poll heads")
         return None
     max_poll_id = max(poll_ids.values())
+
+    # The largest authenticated target head defines the global cut.  Every
+    # eligible row at or before that global ID must be represented by that
+    # target's head; merely listing a target's older head is not a legitimate
+    # way to skip a poll that was already in the cut.
     for check_name in sorted(known_checks):
-        if any(row["id"] <= max_poll_id for row in by_check[check_name]) \
-                and check_name not in poll_ids:
+        rows_at_cut = [row for row in by_check[check_name]
+                       if row["id"] <= max_poll_id]
+        if rows_at_cut and check_name not in poll_ids:
             errors.append(
                 f"historical snapshot omits the chain head for eligible check {check_name}")
+        elif rows_at_cut and poll_ids.get(check_name) != rows_at_cut[-1]["id"]:
+            errors.append(
+                f"historical {check_name} chain head skips an eligible poll at the cut")
+
+    validate_exported_observation_heads(
+        exported_observations, entries, target_rows, errors)
+
+    # Authenticate the post-cut suffixes as append-only continuations.  The
+    # historical projection will not consume these rows, but a verifier must
+    # not silently ignore a broken or rewritten continuation.
+    for check_name, rows in sorted(by_check.items()):
+        if check_name in poll_ids:
+            boundary = poll_ids[check_name]
+            boundary_row = next(row for row in rows if row["id"] == boundary)
+            validate_chain_suffix(
+                [row for row in rows if row["id"] > boundary], poll_fields,
+                boundary_row["record_hash"], f"poll[{check_name}]", errors)
+        else:
+            rebuild_chain(rows, poll_fields, f"poll[{check_name}]", errors)
+
+    norms_by_check = defaultdict(list)
+    for row in norms_all:
+        norms_by_check[row["check_name"]].append(row)
+    for check_name, rows in sorted(norms_by_check.items()):
+        boundary = norm_ids.get(check_name, 0)
+        boundary_hash = GENESIS
+        if boundary:
+            boundary_hash = next(row for row in rows if row["id"] == boundary)["record_hash"]
+        validate_chain_suffix(
+            [row for row in rows if row["id"] > boundary], normalisation_fields,
+            boundary_hash, f"normalisation[{check_name}]", errors)
+
+    expected_poll_keys = {
+        (check_name, row["id"])
+        for check_name in known_checks
+        for row in by_check[check_name]
+        if row["id"] <= max_poll_id
+    }
+    actual_poll_keys = {
+        (check_name, row["id"])
+        for check_name in poll_ids
+        for row in by_check[check_name]
+        if row["id"] <= max_poll_id
+    }
+    if expected_poll_keys != actual_poll_keys:
+        errors.append("historical authenticated poll prefix is not an exact eligible set")
 
     selected_polls = [row for check_name, limit in poll_ids.items()
                       for row in by_check[check_name] if row["id"] <= limit]
@@ -677,12 +821,47 @@ def derive_historical_cut(archive, manifest, errors):
     elif manifest_generated_at != generated_at:
         errors.append(
             "manifest.generated_at does not match the authenticated historical state")
+    cut_time = parse_time(generated_at)
+    if cut_time is not None:
+        # A normalisation row linked to a poll in the historical prefix and
+        # recorded by the cut must not be skipped by declaring an older valid
+        # normalisation head.  Rows appended later remain valid suffix history,
+        # even if they happen to re-normalise an older poll.
+        for check_name, poll_limit in poll_ids.items():
+            norm_rows = [row for row in norms_all
+                         if row["check_name"] == check_name]
+            norm_boundary = norm_ids.get(check_name, 0)
+            skipped = []
+            for row in norm_rows:
+                if row["id"] <= norm_boundary:
+                    continue
+                poll_id = row.get("poll_id")
+                if poll_id is None or poll_id > poll_limit:
+                    continue
+                recorded_at = parse_time(row.get("recorded_at"))
+                if recorded_at is None or recorded_at <= cut_time:
+                    skipped.append(row["id"])
+            if skipped:
+                errors.append(
+                    f"normalisation[{check_name}] head skips historical rows: "
+                    + ", ".join(str(row_id) for row_id in skipped[:20]))
+    historical_collector_id = collector_id(annotation_prefix)
+    if manifest.get("source_collector_id") != historical_collector_id:
+        errors.append(
+            "manifest.source_collector_id does not match the authenticated annotation state")
+    archive_latest_poll = max((row["id"] for row in polls_all), default=max_poll_id)
+    later_poll_count = sum(row["id"] > max_poll_id for row in polls_all)
     return HistoricalCut(
         poll_ids,
         norm_ids,
         annotation_id,
+        annotation_head if annotation_head else GENESIS,
+        historical_collector_id,
         generated_at,
-        manifest.get("export_id") == LEGACY_CONTROL_EVENT_EXPORT_ID,
+        archive_latest_poll,
+        later_poll_count,
+        len(selected_polls),
+        export_id == LEGACY_CONTROL_EVENT_EXPORT_ID,
     )
 
 
@@ -1102,6 +1281,14 @@ def report_projection(expected):
     print(f"record activity: 24h={windows[1]} 7d={windows[7]} 30d={windows[30]}")
 
 
+def report_historical_cut(cut):
+    print("verification_mode: historical")
+    print(f"authenticated_cut_poll: {cut.max_poll_id}")
+    print(f"archive_latest_poll: {cut.archive_latest_poll}")
+    print("later_polls_ignored_as_subsequent_history: "
+          f"{cut.later_poll_count}")
+
+
 def _verify_export(archive_root, export_root, historical=False):
     errors = []
     export_root = Path(export_root).expanduser().resolve()
@@ -1111,6 +1298,11 @@ def _verify_export(archive_root, export_root, historical=False):
                      "records.json", "changes.json"):
         actual[filename] = load_json(export_root / filename, errors)
     manifest = actual.get("manifest.json")
+    exported_observations = {}
+    observation_dir = export_root / "observations"
+    if observation_dir.is_dir():
+        for path in sorted(observation_dir.glob("*.json")):
+            exported_observations[path.stem] = load_json(path, errors)
 
     try:
         archive = Archive(archive_root)
@@ -1119,7 +1311,8 @@ def _verify_export(archive_root, export_root, historical=False):
         return 1
     try:
         try:
-            cut = (derive_historical_cut(archive, manifest, errors)
+            cut = (derive_historical_cut(
+                        archive, manifest, errors, exported_observations)
                    if historical else None)
             expected = (build_projection(archive, errors, cut)
                         if cut is not None or not historical else None)
@@ -1233,6 +1426,8 @@ def _verify_export(archive_root, export_root, historical=False):
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
+    if historical:
+        report_historical_cut(cut)
     report_projection(expected)
     print("Public export independently verified for completeness, archive "
           "correspondence, relationships, deterministic event semantics, "

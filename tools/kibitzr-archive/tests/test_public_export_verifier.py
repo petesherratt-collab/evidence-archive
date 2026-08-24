@@ -6,6 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from kibitzr_archive.public_export import build_export
 from kibitzr_archive.store import ArchiveStore
 
@@ -224,12 +226,64 @@ def test_historical_rejects_broken_chain_continuity(tmp_path):
     _historical_assertion(tmp_path, mutate)
 
 
+def test_historical_rejects_rewritten_later_append(tmp_path):
+    def mutate(_snapshot, _current, archive):
+        # Poll 3 is after the authenticated cut.  It is still part of the
+        # append-only evidence that historical mode must validate as a suffix.
+        with sqlite3.connect(Path(archive) / "polls.db") as conn:
+            conn.execute("UPDATE poll SET polled_at = ? WHERE id = 3",
+                         ("2026-01-04T12:00:00+00:00",))
+
+    _historical_assertion(tmp_path, mutate)
+
+
 def test_historical_rejects_chain_head_mismatch(tmp_path):
     def mutate(snapshot, _current, _archive):
         manifest = _read(snapshot, "manifest.json")
         manifest["per_target_chain_heads"][0]["annotation"] = \
             manifest["per_target_chain_heads"][0]["poll"]
         _write(snapshot, "manifest.json", manifest)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_observation_tail_not_matching_authenticated_head(
+        tmp_path):
+    def mutate(snapshot, _current, _archive):
+        observations = _read(
+            snapshot, "observations/contracts-finder-recent-awards.json")
+        observations["observations"][-1]["id"] = \
+            "contracts-finder-recent-awards:poll:1"
+        _write(snapshot, "observations/contracts-finder-recent-awards.json",
+               observations)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_omitted_eligible_observation_inside_cut(tmp_path):
+    def mutate(snapshot, _current, _archive):
+        observations = _read(
+            snapshot, "observations/contracts-finder-recent-awards.json")
+        # Keep the tail/head intact while removing an earlier eligible row.
+        observations["observations"].pop(0)
+        _write(snapshot, "observations/contracts-finder-recent-awards.json",
+               observations)
+        _resign(snapshot)
+
+    _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_rejects_observation_after_authenticated_cut(tmp_path):
+    def mutate(snapshot, current, _archive):
+        observations = _read(
+            snapshot, "observations/contracts-finder-recent-awards.json")
+        later = _read(
+            current, "observations/contracts-finder-recent-awards.json")
+        observations["observations"].append(later["observations"][-1])
+        _write(snapshot, "observations/contracts-finder-recent-awards.json",
+               observations)
         _resign(snapshot)
 
     _historical_assertion(tmp_path, mutate)
@@ -248,6 +302,13 @@ def test_historical_rejects_snapshot_claiming_records_beyond_cut(tmp_path):
         _resign(snapshot)
 
     _historical_assertion(tmp_path, mutate)
+
+
+def test_historical_cli_does_not_accept_an_arbitrary_cut_number(tmp_path):
+    archive, snapshot, _current = _historical_fixture(tmp_path)
+    with pytest.raises(SystemExit):
+        VERIFIER.main(["--historical", "--cut-poll", "1",
+                       str(archive), str(snapshot)])
 
 
 def test_historical_rejects_snapshot_omitting_record_inside_cut(tmp_path):

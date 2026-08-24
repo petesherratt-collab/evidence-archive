@@ -32,3 +32,13 @@ There are at least three distinct properties:
 
 A verifier should not claim full verification unless all required properties
 are established.
+
+Historical-state verification adds a separate distinction: current-state
+completeness compares with the whole archive as it exists now, while
+historical-state completeness reconstructs an authenticated chain-prefix state
+and validates later rows as append-only continuation. Exact archive equality
+is not the same as historical-state verification; append-only growth should
+preserve the ability to verify earlier authenticated states. Neither is proof
+that an export was published at that time. That publication-time claim needs
+an external commitment, such as Git provenance, an independently retained
+backup, or verified OpenTimestamps/Bitcoin evidence.

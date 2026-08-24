@@ -6,6 +6,31 @@ reconstructs from `polls.db` and retained response blobs. It defines what is
 eligible for publication; it does not claim that a publisher was truthful or
 that the collector polled continuously.
 
+## Verification states
+
+The projection has two completeness modes:
+
+* **Current state:** the public export is exactly the complete projection of
+  every eligible archive row present now.
+* **Historical state:** the public export is exactly the complete projection
+  of an authenticated append-only archive state. The state is derived from the
+  export's target identities, final observation IDs, poll-chain heads,
+  normalisation heads, global annotation head, collector identity, and manifest
+  identity. Those heads are located in the supplied archive and every chain is
+  rebuilt from genesis. The largest authenticated global poll ID defines the
+  boundary; every eligible row through that boundary must be present.
+
+  Rows after the boundary are ignored only for projection reconstruction after
+  their chain links have been checked as a subsequent append-only suffix. A
+  caller cannot replace this proof with an arbitrary poll number or an
+  `ignore-after` option.
+
+Historical-state verification establishes a valid earlier archive
+prefix/state. It does not establish that the export was actually published at
+that historical time. That third claim requires an external commitment, such
+as appropriate Git provenance, an independently retained backup, or verified
+OpenTimestamps/Bitcoin evidence.
+
 ## Target eligibility
 
 The configured public-domain intelligence sources are the five named
@@ -173,3 +198,7 @@ integrity as separate properties. It does not establish source truthfulness,
 complete upstream polling, unsupported HTML-only semantics, human
 interpretation choices beyond these rules, or Bitcoin anchoring solely from
 the presence of a proof file.
+
+The reusable principle is: exact archive equality is not the same as
+historical-state verification. Append-only growth should preserve the ability
+to verify earlier authenticated states.
